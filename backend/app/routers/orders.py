@@ -51,7 +51,7 @@ ORDER_HEADER_MAP = {
     "开始": "start_date", "截止": "end_date",
 }
 
-MB019_HEADERS = ["开始", "截止", "更新", "状态", "甲方", "订单号", "代理", "定价", "平台",
+MB019_HEADERS = ["开始", "截止", "更新", "状态", "甲方", "订单号", "工单号", "代理", "定价", "平台",
                  "小组", "模版", "加名", "撞库", "渠道", "运营商", "任务名", "url", "数量", "时长",
                  "下限", "上限", "pv", "省份", "排除省份", "地市", "排除地市"]
 
@@ -1025,6 +1025,7 @@ def _export_row(db, o):
         o.status or "",
         up.name if up else "",
         o.order_no or "",
+        o.task_id or "",
         cust.code if cust else "",
         (str(o.price) if o.price is not None else ""),
         o.platform or "",
@@ -1048,6 +1049,26 @@ def _export_row(db, o):
     ]
 
 
+def _shift_dv_sqref(sqref, insert_col):
+    """数据校验(下拉)范围：列号 >= insert_col 的右移一列，配合在 insert_col 处插入新列（工单号）"""
+    import re
+    from openpyxl.utils import column_index_from_string, get_column_letter
+    shifted = []
+    for part in str(sqref).replace("$", "").split():
+        sub = []
+        for p in part.split(":"):
+            m = re.match(r"^([A-Z]+)(\d+)$", p)
+            if m:
+                col = column_index_from_string(m.group(1))
+                if col >= insert_col:
+                    col += 1
+                sub.append(f"{get_column_letter(col)}{m.group(2)}")
+            else:
+                sub.append(p)
+        shifted.append(":".join(sub))
+    return " ".join(shifted)
+
+
 def _fill_mb019_export(db, orders):
     """用 MB-019 模版文件填充订单数据，保留模版的样式/下拉框/列宽等结构"""
     import openpyxl
@@ -1059,7 +1080,12 @@ def _fill_mb019_export(db, orders):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "订单表"
-        ws.append(MB019_HEADERS)
+    # 表头统一按 MB019_HEADERS 写一遍，保证新增列（工单号）也有表头且与数据对齐
+    for j, h in enumerate(MB019_HEADERS, 1):
+        ws.cell(row=1, column=j, value=h)
+    # 工单号插入在「订单号」之后（第 7 列）：把模版里第 7 列及之后的下拉校验右移一列，避免错位
+    for dv in ws.data_validations.dataValidation:
+        dv.sqref = _shift_dv_sqref(dv.sqref, 7)
     row = 2
     for o in orders:
         vals = _export_row(db, o)
@@ -1471,11 +1497,7 @@ async def import_orders(file: UploadFile = File(...), db: Session = Depends(get_
                 raw_task_id = (r.get("task_id") or "").strip()
                 if raw_task_id:
                     existing.task_id = raw_task_id
-                elif up.name == "新":
-                    existing.task_id = _gen_new_task_id(db, order_date, ch.name if ch else "", op.name if op else "",
-                                                        province, r.get("city"), r.get("excl_city")) or existing.order_no
-                else:
-                    existing.task_id = "" if (up.name == "牛") else existing.order_no
+                # 文件未提供工单号时保留库中原有工单号（避免导出→再导入把工单号清空或重生成）
                 existing.duration = duration
                 existing.qty = qty
                 existing.province = province

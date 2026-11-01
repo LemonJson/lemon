@@ -950,7 +950,7 @@ export default function Orders({ variant = 'orders' }) {
 
       {importModal && (
         <Modal title="批量导入原始订单" onClose={() => setImportModal(false)}>
-          <div className="note">支持 csv / xlsx。表头参考【模版】提单表.xlsx：开始、截止、更新、状态、甲方、订单号、代理、定价、平台、小组、模版、加名、撞库、渠道、运营商、任务名、url、数量、时长、下限、上限、pv、省份、排除省份、地市、排除地市。</div>
+          <div className="note">支持 csv / xlsx。表头参考【模版】提单表.xlsx：开始、截止、更新、状态、甲方、订单号、工单号、代理、定价、平台、小组、模版、加名、撞库、渠道、运营商、任务名、url、数量、时长、下限、上限、pv、省份、排除省份、地市、排除地市。</div>
           <input type="file" accept=".csv,.xlsx,.xls" ref={importFileRef} />
           {importResult && (
             <div>
