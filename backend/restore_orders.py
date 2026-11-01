@@ -25,7 +25,7 @@
 
 一键恢复（自动选最新备份 + 自动备份当前库）：
     python3 restore_orders.py --latest --backup-db --only restore_list.json --apply
-    或 Windows: restore_orders.bat     Linux/Mac: restore_orders.sh
+    或 Windows: restore_orders.bat
 """
 import argparse
 import json
