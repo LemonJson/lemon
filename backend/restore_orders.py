@@ -22,11 +22,17 @@
 只恢复指定订单号示例：
     # 把上面接口返回的 JSON 存成文件（含 updated_nos 数组），再：
     python3 restore_orders.py backups/backup_xxx.sqlite3 --only restore_list.json --apply
+
+一键恢复（自动选最新备份 + 自动备份当前库）：
+    python3 restore_orders.py --latest --backup-db --only restore_list.json --apply
+    或 Windows: restore_orders.bat     Linux/Mac: restore_orders.sh
 """
 import argparse
 import json
+import shutil
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -40,10 +46,7 @@ def in_clause(n):
 
 
 def load_only_nos(path):
-    """从文件读取要恢复的订单号列表。支持两种格式：
-    - JSON：{"order_nos": [...]} 或 {"updated_nos": [...]} 或直接数组 [...]
-    - 纯文本：每行一个订单号（自动忽略引号/逗号）
-    """
+    """从文件读取要恢复的订单号列表。支持 JSON（updated_nos/order_nos/数组）或每行一个订单号"""
     text = Path(path).read_text(encoding="utf-8").strip()
     nos = set()
     try:
@@ -71,21 +74,57 @@ def load_only_nos(path):
     return nos
 
 
+def pre_apply(args):
+    """真正写库前：可选备份当前库 + 二次确认"""
+    if args.backup_db:
+        src = Path(args.db)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dst = src.with_name(f"{src.name}.bak_{ts}")
+        shutil.copy2(src, dst)
+        print(f"[backup] 已备份当前库到 {dst}")
+    if not args.yes:
+        try:
+            ans = input("确认执行恢复？输入 yes 继续，其它任意键取消: ").strip()
+        except EOFError:
+            ans = ""
+        if ans != "yes":
+            print("已取消。")
+            sys.exit(0)
+
+
 def main():
     ap = argparse.ArgumentParser(description="从 SQLite 备份只恢复 orders 表")
-    ap.add_argument("backup")
+    ap.add_argument("backup", nargs="?", default=None, help="备份文件路径；省略时用 --latest 自动选")
+    ap.add_argument("--latest", action="store_true", help="自动选择 backups/ 下最新的 backup_*.sqlite3")
     ap.add_argument("--db", default="data/lm.db")
     ap.add_argument("--mode", choices=["restore", "merge", "replace"], default="restore")
     ap.add_argument("--only", help="只恢复指定订单号（文件：JSON 或每行一个订单号）")
+    ap.add_argument("--backup-db", action="store_true", help="写库前先备份当前数据库")
+    ap.add_argument("--yes", action="store_true", help="跳过二次确认")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
-    backup = Path(args.backup)
+    if args.backup:
+        backup = Path(args.backup)
+    elif args.latest:
+        candidates = sorted(Path("backups").glob("backup_*.sqlite3"),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+        if not candidates:
+            sys.exit("[错误] backups/ 下没有 backup_*.sqlite3 备份文件")
+        backup = candidates[0]
+    else:
+        sys.exit("[错误] 请指定备份文件路径，或用 --latest 自动选择最新备份")
+
     live = Path(args.db)
     if not backup.exists():
         sys.exit(f"[错误] 备份文件不存在：{backup}")
+    if backup.stat().st_size == 0:
+        sys.exit(f"[错误] 备份文件为空(0字节)，无效：{backup}")
     if not live.exists():
         sys.exit(f"[错误] 当前数据库不存在：{live}")
+
+    print(f"[info] 备份文件: {backup} ({backup.stat().st_size} 字节)")
+    print(f"[info] 当前数据库: {live} ({live.stat().st_size} 字节)")
 
     lv = sqlite3.connect(str(live))
     try:
@@ -104,6 +143,7 @@ def main():
         if args.mode == "replace":
             print(f"[replace] 将清空当前 {len(live_order_nos)} 条订单，导入备份的 {len(bk_order_nos)} 条订单")
             if args.apply:
+                pre_apply(args)
                 lv.execute("DELETE FROM orders")
                 lv.execute(
                     f"INSERT INTO orders (id, {col_list}) "
@@ -139,6 +179,7 @@ def main():
             if not args.apply:
                 print("[干跑] 未写入（加 --apply 生效）")
                 return
+            pre_apply(args)
             if "deleted_at" in common and to_undelete_nos:
                 lv.execute(
                     "UPDATE orders SET deleted_at = NULL "
@@ -213,6 +254,7 @@ def main():
             print("[干跑] 未写入（加 --apply 生效）")
             return
 
+        pre_apply(args)
         # 逐条用备份值覆盖（循环方式最稳妥，避免相关子查询关联错误）
         set_clause = ", ".join(f"{c} = ?" for c in overwrite_cols)
         sel_cols = ", ".join(overwrite_cols)
