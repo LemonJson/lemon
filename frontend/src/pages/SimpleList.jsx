@@ -160,26 +160,17 @@ export default function SimpleList({ kind }) {
   const [dailyModal, setDailyModal] = useState(false)
   const [orderDetail, setOrderDetail] = useState(null)
   const [distModal, setDistModal] = useState(false)
-  const [distDate, setDistDate] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  })
+  const [distDate, setDistDate] = useState('')
   const [distCustomerIds, setDistCustomerIds] = useState([])
   const [billDetail, setBillDetail] = useState(null)
   const [balanceEdit, setBalanceEdit] = useState(null)
-  const [dailyDate, setDailyDate] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  })
+  const [dailyDate, setDailyDate] = useState('')
   const dailyFileRef = useRef(null)
   const [csvModal, setCsvModal] = useState(false)
   const [csvFile, setCsvFile] = useState(null)
   const csvFileRef = useRef(null)
   const [washModal, setWashModal] = useState(false)
-  const [washDate, setWashDate] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  })
+  const [washDate, setWashDate] = useState('')
   const washFileRef = useRef(null)
   const [sfModal, setSfModal] = useState(false)
   const [sfCategory, setSfCategory] = useState('手动')
@@ -205,10 +196,7 @@ export default function SimpleList({ kind }) {
   })
   const [genBillEnd, setGenBillEnd] = useState('')
   const [checkModal, setCheckModal] = useState(false)
-  const [checkDate, setCheckDate] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  })
+  const [checkDate, setCheckDate] = useState('')
   const [checkUpstream, setCheckUpstream] = useState('')
   const [checkResult, setCheckResult] = useState(null)
   const [repeatDetailModal, setRepeatDetailModal] = useState(null)
@@ -216,10 +204,7 @@ export default function SimpleList({ kind }) {
   const [exportType, setExportType] = useState('excel')
   const [batchDelModal, setBatchDelModal] = useState(false)
   const [delByDateModal, setDelByDateModal] = useState(false)
-  const [delByDate, setDelByDate] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  })
+  const [delByDate, setDelByDate] = useState('')
   const [rechargeAlert, setRechargeAlert] = useState(null)
   const [rechargeRate, setRechargeRate] = useState(6.7)
   const [recentDays, setRecentDays] = useState(3)

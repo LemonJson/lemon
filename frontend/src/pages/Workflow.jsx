@@ -2,11 +2,6 @@ import React, { useEffect, useRef, useState } from 'react'
 import { api, getToken, uploadFile, downloadFile } from '../api'
 import { Modal, useToast, useConfirm, Loading } from '../components/ui'
 
-function todayStr() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 const STEP_KEYS = ['receipt', 'daily', 'wash', 'washimport', 'dist', 'bill']
 const STEPS = {
   receipt: { label: '导入回执', desc: '上传回执文件，按回执来源+任务名匹配订单更新工单号' },
@@ -26,7 +21,7 @@ export default function Workflow() {
   const [busyMsg, setBusyMsg] = useState('')
   const [busyProgress, setBusyProgress] = useState(null)
 
-  const [bizDate, setBizDate] = useState(todayStr())
+  const [bizDate, setBizDate] = useState('')
   const [upstreams, setUpstreams] = useState([])
   const [downstreams, setDownstreams] = useState([])
   const [receiptParty, setReceiptParty] = useState('牛')

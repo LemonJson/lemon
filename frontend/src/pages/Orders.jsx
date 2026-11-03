@@ -158,10 +158,7 @@ export default function Orders({ variant = 'orders' }) {
   const [genModal, setGenModal] = useState(false)
   const [genDate, setGenDate] = useState('')
   const [confirmModal, setConfirmModal] = useState(false)
-  const [confirmDate, setConfirmDate] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  })
+  const [confirmDate, setConfirmDate] = useState('')
   const [pendingCheck, setPendingCheck] = useState(null)
   const [filterCollapsed, setFilterCollapsed] = useState(false)
 
