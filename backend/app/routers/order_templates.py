@@ -88,7 +88,7 @@ def delete_template(tid: int, db: Session = Depends(get_db), _=Depends(get_curre
     t = db.query(OrderTemplate).filter(OrderTemplate.id == tid).first()
     if not t:
         raise HTTPException(status_code=404, detail="模版不存在")
-    if db.query(Order).filter(Order.template_id == tid).first():
+    if db.query(Order).filter(Order.template_id == tid, Order.deleted_at.is_(None)).first():
         raise HTTPException(status_code=409, detail="模版被订单引用，不可删除")
     db.delete(t)
     db.commit()

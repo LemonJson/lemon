@@ -543,7 +543,8 @@ def _find_dup_task(db, upstream_id, order_date, task_name, status="未提", excl
     q = db.query(Order).filter(Order.upstream_id == upstream_id,
                                Order.order_date == order_date,
                                Order.task_name == task_name,
-                               Order.operator_id == operator_id)
+                               Order.operator_id == operator_id,
+                               Order.deleted_at.is_(None))
     if exclude_id is not None:
         q = q.filter(Order.id != exclude_id)
     dup = q.first()
@@ -553,7 +554,8 @@ def _find_dup_task(db, upstream_id, order_date, task_name, status="未提", excl
         q2 = db.query(Order).filter(Order.upstream_id == upstream_id,
                                     Order.task_name == task_name,
                                     Order.operator_id == operator_id,
-                                    Order.status.in_(ACTIVE_STATUSES))
+                                    Order.status.in_(ACTIVE_STATUSES),
+                                    Order.deleted_at.is_(None))
         if exclude_id is not None:
             q2 = q2.filter(Order.id != exclude_id)
         return q2.first()
@@ -566,7 +568,8 @@ def _find_dup_task_id(db, task_id, exclude_id=None):
     if not task_id:
         return None
     q = db.query(Order).filter(Order.task_id == task_id,
-                               Order.status.in_(("未提", "在执", "改单", "待停")))
+                               Order.status.in_(("未提", "在执", "改单", "待停")),
+                               Order.deleted_at.is_(None))
     if exclude_id is not None:
         q = q.filter(Order.id != exclude_id)
     return q.first()
@@ -643,7 +646,7 @@ def create_order(body: OrderBody, db: Session = Depends(get_db), user=Depends(ge
 
 @router.put("/{oid}")
 def update_order(oid: int, body: OrderBody, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    o = db.query(Order).filter(Order.id == oid).first()
+    o = db.query(Order).filter(Order.id == oid, Order.deleted_at.is_(None)).first()
     if not o:
         raise HTTPException(status_code=404, detail="订单不存在")
     before = _snapshot(db, o)
@@ -743,7 +746,7 @@ def update_order(oid: int, body: OrderBody, db: Session = Depends(get_db), user=
 
 @router.put("/{oid}/dist-config")
 def save_dist_config(oid: int, body: OrderDistConfigBody, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    o = db.query(Order).filter(Order.id == oid).first()
+    o = db.query(Order).filter(Order.id == oid, Order.deleted_at.is_(None)).first()
     if not o:
         raise HTTPException(status_code=404, detail="订单不存在")
     o.template_id = body.template_id
@@ -757,7 +760,7 @@ def save_dist_config(oid: int, body: OrderDistConfigBody, db: Session = Depends(
 
 @router.delete("/{oid}")
 def delete_order(oid: int, db: Session = Depends(get_db), _=Depends(require_admin)):
-    o = db.query(Order).filter(Order.id == oid).first()
+    o = db.query(Order).filter(Order.id == oid, Order.deleted_at.is_(None)).first()
     if not o:
         raise HTTPException(status_code=404, detail="订单不存在")
     o.deleted_at = datetime.now()
@@ -767,7 +770,7 @@ def delete_order(oid: int, db: Session = Depends(get_db), _=Depends(require_admi
 
 @router.post("/{oid}/stop")
 def stop_order(oid: int, body: StopBody, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    o = db.query(Order).filter(Order.id == oid).first()
+    o = db.query(Order).filter(Order.id == oid, Order.deleted_at.is_(None)).first()
     if not o:
         raise HTTPException(status_code=404, detail="订单不存在")
     o.stop_prev_order_date = o.order_date  # 保存停单前的更新日期
@@ -789,7 +792,7 @@ def stop_order(oid: int, body: StopBody, db: Session = Depends(get_db), user=Dep
 @router.post("/{oid}/cancel-stop")
 def cancel_stop(oid: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """取消停单：待停订单恢复为在执（仅状态与更新时间变化）"""
-    o = db.query(Order).filter(Order.id == oid).first()
+    o = db.query(Order).filter(Order.id == oid, Order.deleted_at.is_(None)).first()
     if not o:
         raise HTTPException(status_code=404, detail="订单不存在")
     if o.status != "待停":
@@ -813,7 +816,7 @@ def batch_stop(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(
     if body.order_date:
         if body.order_date > date.today():
             raise HTTPException(status_code=400, detail="更新日期不能是未来日期，请修改更新日期")
-    rows = db.query(Order).filter(Order.id.in_(body.ids)).all()
+    rows = db.query(Order).filter(Order.id.in_(body.ids), Order.deleted_at.is_(None)).all()
     ids = [o.id for o in rows]
     for o in rows:
         o.stop_prev_order_date = o.order_date  # 保存停单前的更新日期
@@ -837,7 +840,7 @@ def batch_reopen(body: BatchStopBody, db: Session = Depends(get_db), user=Depend
     if body.order_date:
         if body.order_date > date.today():
             raise HTTPException(status_code=400, detail="更新日期不能是未来日期，请修改更新日期")
-    rows = db.query(Order).filter(Order.id.in_(body.ids)).all()
+    rows = db.query(Order).filter(Order.id.in_(body.ids), Order.deleted_at.is_(None)).all()
     order_nos = []
     for o in rows:
         if o.status == "已停":
@@ -861,7 +864,7 @@ def batch_reopen(body: BatchStopBody, db: Session = Depends(get_db), user=Depend
 @router.post("/{oid}/reopen")
 def reopen_order(oid: int, body: ReopenBody, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """复提：已停订单改回未提（状态默认未提，更新日期默认当天，可改开始/结束日期）"""
-    o = db.query(Order).filter(Order.id == oid).first()
+    o = db.query(Order).filter(Order.id == oid, Order.deleted_at.is_(None)).first()
     if not o:
         raise HTTPException(status_code=404, detail="订单不存在")
     if o.status != "已停":
@@ -886,7 +889,7 @@ def reopen_order(oid: int, body: ReopenBody, db: Session = Depends(get_db), user
 
 @router.post("/batch-delete")
 def batch_delete(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(require_admin)):
-    rows = db.query(Order).filter(Order.id.in_(body.ids)).all()
+    rows = db.query(Order).filter(Order.id.in_(body.ids), Order.deleted_at.is_(None)).all()
     ids = [o.id for o in rows]
     order_nos = [o.order_no for o in rows]
     now = datetime.now()
@@ -910,7 +913,7 @@ def batch_extend(body: dict, db: Session = Depends(get_db), user=Depends(get_cur
         ed = datetime.strptime(end_date, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=422, detail="截止日期格式错误")
-    rows = db.query(Order).filter(Order.id.in_(ids)).all()
+    rows = db.query(Order).filter(Order.id.in_(ids), Order.deleted_at.is_(None)).all()
     from ..routers.data import _sync_order_stop_alert
     for o in rows:
         o.end_date = ed
@@ -924,7 +927,7 @@ def batch_extend(body: dict, db: Session = Depends(get_db), user=Depends(get_cur
 
 @router.post("/batch-group")
 def batch_group(body: BatchGroupBody, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    rows = db.query(Order).filter(Order.id.in_(body.ids)).all()
+    rows = db.query(Order).filter(Order.id.in_(body.ids), Order.deleted_at.is_(None)).all()
     for o in rows:
         o.group_name = body.group_name or ""
         o.updated_at = datetime.now()
@@ -937,7 +940,8 @@ def batch_group(body: BatchGroupBody, db: Session = Depends(get_db), user=Depend
 def fix_stop_end_dates(db: Session = Depends(get_db), user=Depends(require_admin)):
     """一次性修复：已停/待停订单的截止日期改为与更新日期一致"""
     rows = db.query(Order).filter(Order.status.in_(["已停", "待停"]),
-                                  Order.order_date.isnot(None)).all()
+                                  Order.order_date.isnot(None),
+                                  Order.deleted_at.is_(None)).all()
     fixed = 0
     for o in rows:
         if o.end_date != o.order_date:
@@ -954,7 +958,7 @@ def fix_stop_end_dates(db: Session = Depends(get_db), user=Depends(require_admin
 @router.post("/check-duplicates")
 def check_duplicates(db: Session = Depends(get_db), _=Depends(get_current_user)):
     """查重：只验证「在执」订单，运营商 + url集合 + 地区集合 全部一致才算重复"""
-    orders = db.query(Order).filter(Order.status == "在执").all()
+    orders = db.query(Order).filter(Order.status == "在执", Order.deleted_at.is_(None)).all()
     for o in orders:
         o.dup_order_nos = None
 
@@ -985,7 +989,7 @@ def check_duplicates(db: Session = Depends(get_db), _=Depends(get_current_user))
         if others:
             nos = []
             for oid in sorted(others):
-                other = db.query(Order).filter(Order.id == oid).first()
+                other = db.query(Order).filter(Order.id == oid, Order.deleted_at.is_(None)).first()
                 if other:
                     nos.append(other.order_no)
             o.dup_order_nos = "\n".join(nos)
@@ -1382,11 +1386,11 @@ async def import_orders(file: UploadFile = File(...), db: Session = Depends(get_
     cust_code_map = {c.id: c.code for c in db.query(Customer).all()}
     group_consistency = {}
     # 预加载已有订单号，导入按订单号匹配（订单号相同才更新，无订单号则插入）
-    existing_order_no = {o.order_no: o for o in db.query(Order).all() if o.order_no}
+    existing_order_no = {o.order_no: o for o in db.query(Order).filter(Order.deleted_at.is_(None)).all() if o.order_no}
     # 预加载已有订单的小组出数模版（(一级代理id, 小组) -> [(订单id, tpl_id)]），用于同代理同小组一致性校验（仅查在执订单）
     db_group_tpls = {}
     for _o in db.query(Order).filter(Order.group_name.isnot(None), Order.group_name != "",
-                                     Order.status == "在执").all():
+                                      Order.status == "在执", Order.deleted_at.is_(None)).all():
         _g = (_o.group_name or "").strip()
         if _g:
             db_group_tpls.setdefault((_o.customer_id, _g), []).append((_o.id, _o.tpl_id))
@@ -1652,7 +1656,7 @@ async def import_receipt(file: UploadFile = File(...), party: str = Form("牛"),
         channel_val = str(r[ch_col]).strip() if ch_col < len(r) and r[ch_col] is not None else ""
         url_val = str(r[url_col]).strip() if url_col >= 0 and url_col < len(r) and r[url_col] is not None else ""
         # 工单号已在订单中存在：跳过该回执数据（不匹配、不校验、不报错）
-        if new_task_id and db.query(Order).filter(Order.task_id == new_task_id).first():
+        if new_task_id and db.query(Order).filter(Order.task_id == new_task_id, Order.deleted_at.is_(None)).first():
             continue
         if not task_name:
             continue
@@ -1669,6 +1673,7 @@ async def import_receipt(file: UploadFile = File(...), party: str = Form("牛"),
             Order.upstream_id == up_id,
             Order.operator_id == (op.id if op else None),
             Order.channel_id == (ch.id if ch else None),
+            Order.deleted_at.is_(None),
         ).all()
         # 有 url 时：按 URL 集合精确比对（回执与订单 url 都按 换行/竖线 拆成集合、去末尾斜杠/协议前缀，用集合去重比对）
         if url_val:
@@ -1834,7 +1839,7 @@ def generate_tidabiao(body: GenerateBody, db: Session = Depends(get_db), user=De
         date_obj = date.today()
     # 按勾选订单生成；勾选时校验其更新日期与所选日期一致
     if body.order_ids:
-        orders = db.query(Order).filter(Order.id.in_(body.order_ids)).all()
+        orders = db.query(Order).filter(Order.id.in_(body.order_ids), Order.deleted_at.is_(None)).all()
         if not orders:
             raise HTTPException(status_code=404, detail="没有找到勾选的订单")
         mismatch = [o for o in orders if o.order_date != date_obj]
@@ -1843,7 +1848,7 @@ def generate_tidabiao(body: GenerateBody, db: Session = Depends(get_db), user=De
             more = f" 等共{len(mismatch)}条" if len(mismatch) > 10 else ""
             raise HTTPException(status_code=400, detail=f"勾选订单的更新日期与所选日期（{body.date}）不一致：{shown}{more}")
     else:
-        orders = db.query(Order).filter(Order.order_date == date_obj).all()
+        orders = db.query(Order).filter(Order.order_date == date_obj, Order.deleted_at.is_(None)).all()
     if not orders:
         raise HTTPException(status_code=404, detail=f"更新日期 {body.date or date_obj.strftime('%Y-%m-%d')} 没有可生成的订单")
     try:
@@ -1874,7 +1879,8 @@ def confirm_tidabiao_pending_check(db: Session = Depends(get_db), _=Depends(get_
         date_obj = date.today()
     rows = db.query(Order).filter(Order.order_date.isnot(None),
                                   Order.order_date < date_obj,
-                                  Order.status.in_(["未提", "待停", "改单"])) \
+                                  Order.status.in_(["未提", "待停", "改单"]),
+                                  Order.deleted_at.is_(None)) \
         .order_by(Order.order_date, Order.id).all()
     data = [{"order_no": o.order_no or "", "task_name": o.task_name or "",
              "status": o.status or "", "order_date": fmt_date(o.order_date) if o.order_date else ""}
@@ -1893,7 +1899,7 @@ def confirm_tidabiao(body: GenerateBody, db: Session = Depends(get_db), user=Dep
     else:
         date_obj = date.today()
     if body.order_ids:
-        orders = db.query(Order).filter(Order.id.in_(body.order_ids)).all()
+        orders = db.query(Order).filter(Order.id.in_(body.order_ids), Order.deleted_at.is_(None)).all()
         if not orders:
             raise HTTPException(status_code=404, detail="没有找到勾选的订单")
         mismatch = [o for o in orders if o.order_date != date_obj]
@@ -1902,7 +1908,7 @@ def confirm_tidabiao(body: GenerateBody, db: Session = Depends(get_db), user=Dep
             more = f" 等共{len(mismatch)}条" if len(mismatch) > 10 else ""
             raise HTTPException(status_code=400, detail=f"勾选订单的更新日期与提单日期（{body.date}）不一致：{shown}{more}")
     else:
-        orders = db.query(Order).filter(Order.order_date == date_obj).all()
+        orders = db.query(Order).filter(Order.order_date == date_obj, Order.deleted_at.is_(None)).all()
     if not orders:
         raise HTTPException(status_code=404, detail=f"提单日期 {body.date or date_obj.strftime('%Y-%m-%d')} 没有可确认的订单")
     batch_no = _next_batch_no(db, date_obj)

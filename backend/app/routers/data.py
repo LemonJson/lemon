@@ -312,7 +312,7 @@ def _order_info_by_task_id(db, task_id):
     """按工单号关联订单，返回 甲方/任务名/运营商/一级代理/二级代理/渠道/平台"""
     if not task_id:
         return {}
-    o = db.query(Order).filter(Order.task_id == task_id).first()
+    o = db.query(Order).filter(Order.task_id == task_id, Order.deleted_at.is_(None)).first()
     if not o:
         return {}
     up = db.query(Customer).filter(Customer.id == o.upstream_id).first()
@@ -347,7 +347,7 @@ def _build_import_ctx(db):
     customers = {c.id: c for c in db.query(Customer).all()}
     operators = {op.id: op.name for op in db.query(Operator).all()}
     channels = {ch.id: ch.name for ch in db.query(Channel).all()}
-    orders = {o.task_id: o for o in db.query(Order).filter(Order.task_id.isnot(None)).all()}
+    orders = {o.task_id: o for o in db.query(Order).filter(Order.task_id.isnot(None), Order.deleted_at.is_(None)).all()}
     return {"wash": wash, "platforms": platforms, "cats": cats,
             "customers": customers, "operators": operators, "channels": channels, "orders": orders}
 
@@ -662,7 +662,7 @@ def _count_unmatched(db, file_list):
 
 def _count_stopped_abnormal(db, file_list, date_obj):
     """统计关联到已停订单、且数据日期已过截止日期 T+1（末次出数日期 end_date+1）仍在出数的异常数据"""
-    stopped = {o.task_id: o for o in db.query(Order).filter(Order.status == "已停").all() if o.task_id}
+    stopped = {o.task_id: o for o in db.query(Order).filter(Order.status == "已停", Order.deleted_at.is_(None)).all() if o.task_id}
     chans = {c.id: c.name for c in db.query(Channel).all()}
     total = 0
     tids = set()
@@ -690,7 +690,7 @@ def _count_inactive_orders(db, date_obj):
     has_data = {r[0] for r in db.query(DailyData.task_id).filter(DailyData.biz_date == date_obj).all() if r[0]}
     chans = {c.id: c.name for c in db.query(Channel).all()}
     items = []
-    for o in db.query(Order).filter(Order.status == "在执").all():
+    for o in db.query(Order).filter(Order.status == "在执", Order.deleted_at.is_(None)).all():
         if o.task_id and o.order_date and date_obj >= o.order_date + timedelta(days=2) and o.task_id not in has_data:
             items.append({"task_id": o.task_id, "task_name": o.task_name or "",
                           "channel": chans.get(o.channel_id, ""),
@@ -955,7 +955,7 @@ def wash_export(date: str = "", db: Session = Depends(get_db), _=Depends(get_cur
     date_obj = _parse_biz_date(date)
     if not date_obj:
         raise HTTPException(status_code=422, detail="请选择数据日期")
-    add_name_tids = [o.task_id for o in db.query(Order).filter(Order.add_name.is_(True)).all() if o.task_id]
+    add_name_tids = [o.task_id for o in db.query(Order).filter(Order.add_name.is_(True), Order.deleted_at.is_(None)).all() if o.task_id]
     qy = db.query(DailyData).filter(
         DailyData.biz_date == date_obj,
         or_(DailyData.name.is_(None), DailyData.name == ""),
@@ -975,7 +975,7 @@ def wash_stats(date: str = "", db: Session = Depends(get_db), _=Depends(get_curr
     date_obj = _parse_biz_date(date)
     if not date_obj:
         raise HTTPException(status_code=422, detail="请选择数据日期")
-    add_name_tids = [o.task_id for o in db.query(Order).filter(Order.add_name.is_(True)).all() if o.task_id]
+    add_name_tids = [o.task_id for o in db.query(Order).filter(Order.add_name.is_(True), Order.deleted_at.is_(None)).all() if o.task_id]
     qy = db.query(DailyData).filter(DailyData.biz_date == date_obj)
     if add_name_tids:
         qy = qy.filter(DailyData.task_id.in_(add_name_tids))
@@ -1022,7 +1022,7 @@ def _check_daily_result(db, date_obj, upstream=None):
         up = db.query(Customer).filter(Customer.ctype == "upstream", Customer.status == 1,
                                         or_(Customer.name == upstream, Customer.code == upstream)).first()
         up_id = up.id if up else None
-    orders_q = db.query(Order).filter(Order.status == "在执")
+    orders_q = db.query(Order).filter(Order.status == "在执", Order.deleted_at.is_(None))
     if up_id:
         orders_q = orders_q.filter(Order.upstream_id == up_id)
     orders = orders_q.all()
@@ -1978,7 +1978,7 @@ def _build_daily_bills(db, date_obj, customer_ids=None):
         DailyData.biz_date == date_obj).group_by(DailyData.task_id).all()
     tids = {tid for tid, _ in rows if tid}
     orders_by_tid = {o.task_id: o for o in db.query(Order).filter(
-        Order.task_id.in_(tids)).all()} if tids else {}
+        Order.task_id.in_(tids), Order.deleted_at.is_(None)).all()} if tids else {}
     needed_cids = {o.customer_id for o in orders_by_tid.values()}
     needed_chids = {o.channel_id for o in orders_by_tid.values() if o.channel_id}
     needed_oids = {o.operator_id for o in orders_by_tid.values() if o.operator_id}
@@ -2163,7 +2163,7 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
 
     # 预加载参考数据，消除逐工单 N+1 查询
     task_ids = {d.task_id for d in rows if d.task_id}
-    orders_by_tid = {o.task_id: o for o in db.query(Order).filter(Order.task_id.in_(task_ids)).all()}
+    orders_by_tid = {o.task_id: o for o in db.query(Order).filter(Order.task_id.in_(task_ids), Order.deleted_at.is_(None)).all()}
     customers = {c.id: c for c in db.query(Customer).all()}
     channels = {c.id: c for c in db.query(Channel).all()}
     operators = {o.id: o for o in db.query(Operator).all()}
@@ -3084,7 +3084,7 @@ def export_bills_summary(db: Session = Depends(get_db), _=Depends(get_current_us
         task_ids = [r[0] for r in db.query(DailyData.task_id)
                     .filter(DailyData.biz_date == d, DailyData.task_id.isnot(None)).distinct().all()]
         order_task_map = {}
-        for o in db.query(Order).filter(Order.task_id.in_(task_ids)).all():
+        for o in db.query(Order).filter(Order.task_id.in_(task_ids), Order.deleted_at.is_(None)).all():
             order_task_map[o.task_id] = (o.upstream_id, o.channel_id, o.operator_id)
         agg = defaultdict(lambda: defaultdict(int))
         for (tid,) in db.query(DailyData.task_id).filter(DailyData.biz_date == d).all():
@@ -3340,7 +3340,7 @@ def _build_summary_wb_day(db, date_obj, customer_ids=None):
     task_ids = [r[0] for r in db.query(DailyData.task_id).filter(
         DailyData.biz_date == date_obj, DailyData.task_id.isnot(None)).distinct().all()]
     order_task_map = {}
-    for o in db.query(Order).filter(Order.task_id.in_(task_ids)).all():
+    for o in db.query(Order).filter(Order.task_id.in_(task_ids), Order.deleted_at.is_(None)).all():
         order_task_map[o.task_id] = (o.upstream_id, o.channel_id, o.operator_id)
     agg = defaultdict(lambda: defaultdict(int))
     for (tid,) in db.query(DailyData.task_id).filter(DailyData.biz_date == date_obj).all():
@@ -3760,7 +3760,7 @@ def _upstream_groups(db, up, day, rt_bills=None):
     rows = db.query(DailyData).filter(DailyData.biz_date == day, DailyData.upstream == up.name).all()
     tids = {d.task_id for d in rows if d.task_id}
     orders_by_tid = {o.task_id: o for o in db.query(Order).filter(
-        Order.task_id.in_(tids)).all()} if tids else {}
+        Order.task_id.in_(tids), Order.deleted_at.is_(None)).all()} if tids else {}
     price_map = {}
     for p in db.query(CustomerPrice).filter(CustomerPrice.customer_id == up.id).all():
         price_map[(p.channel_id, p.operator_id)] = float(p.price)
@@ -4414,7 +4414,7 @@ def _regenerate_stop_alerts(db, with_notify=False):
     cleared = db.query(Alert).filter(Alert.type == "停单提醒",
                                      Alert.status == "未处理").delete(synchronize_session=False)
     created = 0
-    for o in db.query(Order).filter(Order.status == "在执", Order.end_date.isnot(None),
+    for o in db.query(Order).filter(Order.status == "在执", Order.deleted_at.is_(None), Order.end_date.isnot(None),
                                     Order.end_date <= target).all():
         db.add(Alert(level="提醒", type="停单提醒", customer_id=o.customer_id,
                      task_name=o.task_name, order_no=o.order_no, order_id=o.id,

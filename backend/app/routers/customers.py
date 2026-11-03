@@ -303,7 +303,7 @@ def customer_orders(cid: int, db: Session = Depends(get_db), _=Depends(get_curre
         conds.append(Order.secondary_agent == name)
     if code and code != name:
         conds.append(Order.secondary_agent == code)
-    rows = db.query(Order).filter(or_(*conds)).order_by(Order.id.desc()).all()
+    rows = db.query(Order).filter(or_(*conds), Order.deleted_at.is_(None)).order_by(Order.id.desc()).all()
     data = []
     for o in rows:
         ch = db.query(Channel).filter(Channel.id == o.channel_id).first()
