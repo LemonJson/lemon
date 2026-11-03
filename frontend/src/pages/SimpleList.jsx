@@ -1050,6 +1050,8 @@ export default function SimpleList({ kind }) {
         {showBatchDel && kind !== 'daily' && selected.length > 0 && <button className="btn danger" onClick={batchDelete}>⚠️ 批量删除({selected.length})</button>}
         {kind === 'daily' && can('daily:backfill_category') && <button className="btn" onClick={() => backfillCategory().catch(e => showError(e.message))}>补充品类</button>}
         {kind === 'sourcefiles' && can('file:upload') && <button className="btn primary" onClick={() => { setSfCategory('手动'); setSfModal(true) }}>上传文件</button>}
+        {kind === 'urls' && <button className="btn" onClick={() => downloadFile('/api/urls/import-template').catch(e => showError(e.message))}>下载模版</button>}
+        {kind === 'urls' && <button className="btn green" onClick={() => { downloadFile('/api/urls/export?' + buildQuery(filters)).catch(e => showError(e.message)); toast('正在导出...'); }}>导出 Excel</button>}
         {cfg.imp && can(`${cfg.perm}:import`) && <button className="btn" onClick={() => fileRef.current.click()}>导入 Excel</button>}
         {cfg.export && can('daily:export') && <button className="btn green" onClick={() => setExportModal(true)}>导出数据</button>}
         {kind === 'daily' && can('daily:batch_delete') && <button className="btn danger" onClick={() => setBatchDelModal(true)}>⚠️ 批量删除</button>}

@@ -478,6 +478,122 @@ async def import_urls(file: UploadFile = File(...), db: Session = Depends(get_db
     return {"code": 0, "data": {"imported": n}, "msg": f"导入 {n} 条配件"}
 
 
+def _style_parts_sheet(ws, headers):
+    """美化配件表：表头加粗白字蓝底、列宽、边框、冻结表头"""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    widths = {"归属方": 18, "大品类": 14, "小品类": 14, "平台": 14, "命名": 24, "渠道": 14, "url": 55, "等级": 8}
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor="4472C4")
+    center = Alignment(horizontal="center", vertical="center")
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    thin = Side(style="thin", color="BFBFBF")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for j, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=j)
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = center
+        c.border = border
+        ws.column_dimensions[get_column_letter(j)].width = widths.get(h, 14)
+    ws.row_dimensions[1].height = 22
+    ws.freeze_panes = "A2"
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, max_col=len(headers)):
+        for cell in row:
+            cell.border = border
+            h = headers[cell.column - 1]
+            cell.alignment = left if h in ("url", "命名") else center
+
+
+@router.get("/urls/import-template")
+def urls_import_template(_=Depends(get_current_user)):
+    """下载配件管理导入模版（表头：归属方/大品类/小品类/平台/命名/渠道/url/等级）"""
+    import openpyxl
+    from urllib.parse import quote
+    from fastapi.responses import Response
+    headers = ["归属方", "大品类", "小品类", "平台", "命名", "渠道", "url", "等级"]
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "配件导入模版"
+    ws.append(headers)
+    _style_parts_sheet(ws, headers)
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    filename = "配件导入模版.xlsx"
+    return Response(content=bio.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
+
+
+@router.get("/urls/export")
+def export_urls(db: Session = Depends(get_db), _=Depends(get_current_user),
+                owner: str = "", level: str = "", channel: str = "", url: str = "",
+                name: str = "", cat1: str = "", cat2: str = "", platform: str = ""):
+    """按导入模版结构导出配件数据（归属方/大品类/小品类/平台/命名/渠道/url/等级）"""
+    import openpyxl
+    from urllib.parse import quote
+    from fastapi.responses import Response
+    q = db.query(Url).order_by(Url.id)
+    if owner:
+        c = db.query(Customer).filter(or_(Customer.name.like(f"%{owner}%"),
+                                          Customer.code.like(f"%{owner}%"))).all()
+        q = q.filter(Url.owner_id.in_([x.id for x in c]) if c else [-1])
+    if level:
+        q = q.filter(Url.level == level)
+    if channel:
+        ch = db.query(Channel).filter(Channel.name.like(f"%{channel}%")).all()
+        q = q.filter(Url.channel_id.in_([c.id for c in ch]) if ch else [-1])
+    if url:
+        q = q.filter(Url.url.like(f"%{url}%"))
+    if name:
+        q = q.filter(Url.name.like(f"%{name}%"))
+    if cat1:
+        cats = db.query(Category).filter(Category.name.like(f"%{cat1}%"), Category.level == 1).all()
+        q = q.filter(Url.cat1_id.in_([c.id for c in cats]) if cats else [-1])
+    if cat2:
+        cats = db.query(Category).filter(Category.name.like(f"%{cat2}%"), Category.level == 2).all()
+        q = q.filter(Url.cat2_id.in_([c.id for c in cats]) if cats else [-1])
+    if platform:
+        plats = db.query(Platform).filter(Platform.name.like(f"%{platform}%")).all()
+        q = q.filter(Url.platform_id.in_([p.id for p in plats]) if plats else [-1])
+    rows = q.all()
+    cust_map = {c.id: c for c in db.query(Customer).all()}
+    cat_map = {c.id: c for c in db.query(Category).all()}
+    ch_map = {c.id: c for c in db.query(Channel).all()}
+    plat_map = {p.id: p for p in db.query(Platform).all()}
+    headers = ["归属方", "大品类", "小品类", "平台", "命名", "渠道", "url", "等级"]
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "配件数据"
+    ws.append(headers)
+    for u in rows:
+        cat1 = cat_map.get(u.cat1_id)
+        cat2 = cat_map.get(u.cat2_id)
+        ch = ch_map.get(u.channel_id)
+        owner_c = cust_map.get(u.owner_id)
+        plat = plat_map.get(u.platform_id)
+        ws.append([
+            owner_c.name if owner_c else "",
+            cat1.name if cat1 else "",
+            cat2.name if cat2 else "",
+            plat.name if plat else "",
+            u.name or "",
+            ch.name if ch else "",
+            u.url or "",
+            u.level or "中",
+        ])
+    _style_parts_sheet(ws, headers)
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    filename = "配件数据.xlsx"
+    return Response(content=bio.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
+
+
 # ============ 配置中心 ============
 
 CONFIG_ITEMS = [
