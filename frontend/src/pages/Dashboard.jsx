@@ -19,6 +19,7 @@ export default function Dashboard() {
   const [startD, setStartD] = useState('')
   const [endD, setEndD] = useState('')
   const [dailyBills, setDailyBills] = useState([])
+  const [editWalletDate, setEditWalletDate] = useState(null)
   const [agentTrend, setAgentTrend] = useState({ dates: [], series: [] })
   const [agents, setAgents] = useState([])
   const [agentIds, setAgentIds] = useState([])
@@ -186,23 +187,38 @@ export default function Dashboard() {
           {dailyBills.length === 0 ? <div className="empty">暂无数据</div> : (
             <div style={{ maxHeight: 320, overflowY: 'auto' }}>
               <table>
-                <thead><tr><th>日期</th><th className="num">利润（元）</th><th className="num">账单余额（元）</th><th className="num">钱包余额（U）</th></tr></thead>
+                <thead><tr><th style={{ width: 52 }}>日期</th><th className="num">利润（元）</th><th className="num">账单余额（元）</th><th className="num">钱包余额（U）</th></tr></thead>
                 <tbody>
                   {dailyBills.map(r => (
                     <tr key={r.date}>
-                      <td>{r.date}</td>
+                      <td style={{ width: 52, whiteSpace: 'nowrap' }}>{r.date.slice(5)}</td>
                       <td className="num" style={{ color: r.profit < 0 ? 'var(--red)' : 'inherit' }}>{r.profit != null ? r.profit.toLocaleString() : '—'}</td>
                       <td className="num">{r.bill_balance != null ? r.bill_balance.toLocaleString() : '—'}</td>
                       <td className="num">
-                        <input
-                          type="number" step="0.0001"
-                          key={r.date + '_' + (r.wallet_balance ?? '')}
-                          defaultValue={r.wallet_balance ?? ''}
-                          placeholder="录入"
-                          className="wallet-input"
-                          onBlur={e => { if (e.target.value !== String(r.wallet_balance ?? '')) saveWallet(r, e.target.value) }}
-                          onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
-                        />
+                        {editWalletDate === r.date ? (
+                          <input
+                            type="number" step="0.0001"
+                            autoFocus
+                            defaultValue={r.wallet_balance ?? ''}
+                            className="wallet-input"
+                            onBlur={e => {
+                              if (e.target.value !== String(r.wallet_balance ?? '')) saveWallet(r, e.target.value)
+                              setEditWalletDate(null)
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') e.target.blur()
+                              if (e.key === 'Escape') setEditWalletDate(null)
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="wallet-display"
+                            title="双击编辑钱包余额"
+                            onDoubleClick={() => setEditWalletDate(r.date)}
+                          >
+                            {r.wallet_balance != null ? r.wallet_balance : 0}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}

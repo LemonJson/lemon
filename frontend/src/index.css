@@ -245,7 +245,10 @@ tr.row-alert:hover td { background: #fecaca !important; }
 .row-trend .panel { margin-bottom: 0; min-width: 0; }
 .row-trend .notif-panel, .row-trend .daily-bill-panel { display: flex; flex-direction: column; }
 .daily-bill-panel th, .daily-bill-panel td { padding: 6px 7px; font-size: 12.5px; }
-.daily-bill-panel .wallet-input { width: 76px; }
+.daily-bill-panel .wallet-input { width: 110px; }
+.daily-bill-panel .wallet-display { display: inline-block; min-width: 90px; padding: 2px 6px; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
+.daily-bill-panel .wallet-display:hover { border-color: var(--line); background: var(--bg-soft, #f8fafc); }
+.daily-bill-panel .wallet-placeholder { color: var(--sub); font-size: 11px; }
 .ps-table { table-layout: fixed; width: 100%; }
 .ps-table th, .ps-table td { padding: 4px 4px; }
 .ps-table th { white-space: nowrap; line-height: 1.25; }
