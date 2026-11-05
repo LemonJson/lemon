@@ -97,6 +97,8 @@ def customer_detail(cid: int, db: Session = Depends(get_db), _=Depends(get_curre
 def create_customer(body: CustomerBody, db: Session = Depends(get_db), _=Depends(get_current_user)):
     if db.query(Customer).filter(Customer.code == body.code).first():
         raise HTTPException(status_code=409, detail="客户编号已存在")
+    if db.query(Customer).filter(Customer.name == body.name, Customer.deleted_at.is_(None)).first():
+        raise HTTPException(status_code=409, detail="客户名称已存在")
     c = Customer(**body.model_dump())
     db.add(c)
     db.commit()
@@ -108,6 +110,10 @@ def update_customer(cid: int, body: CustomerBody, db: Session = Depends(get_db),
     c = db.query(Customer).filter(Customer.id == cid).first()
     if not c:
         raise HTTPException(status_code=404, detail="客户不存在")
+    dup = db.query(Customer).filter(Customer.name == body.name, Customer.id != cid,
+                                    Customer.deleted_at.is_(None)).first()
+    if dup:
+        raise HTTPException(status_code=409, detail="客户名称已存在")
     for k, v in body.model_dump().items():
         setattr(c, k, v)
     c.updated_at = datetime.now()

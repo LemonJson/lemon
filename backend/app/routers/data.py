@@ -2071,7 +2071,7 @@ def _build_daily_bills(db, date_obj, customer_ids=None):
         b["sales"] += psales
         b["cost"] += round(pqty * float(ps.purchase_price or 0), 2)
         key = f"product_{ps.id}"
-        b["groups"][key] = {"task_name": prod.name, "order_no": "/", "channel": "", "operator": "",
+        b["groups"][key] = {"task_name": prod.name, "order_no": ps.region or "", "channel": "", "operator": "",
                             "qty": pqty, "amount": psales, "unit": float(ps.sales_price or 0),
                             "add_name": None, "is_product": True}
     # 充值信息
@@ -2359,7 +2359,7 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
             b["sales"] += psales
             b["cost"] += round(pqty * float(ps.purchase_price or 0), 2)
             key = f"product_{ps.id}"
-            b["groups"][key] = {"task_name": prod.name, "order_no": "/", "channel": "",
+            b["groups"][key] = {"task_name": prod.name, "order_no": ps.region or "", "channel": "",
                                 "operator": "", "qty": pqty, "amount": psales,
                                 "unit": float(ps.sales_price or 0), "add_name": None,
                                 "is_product": True}
@@ -4060,7 +4060,7 @@ def bill_detail(bid: int, db: Session = Depends(get_db), _=Depends(get_current_u
             ProductSale.sale_date == b.biz_date, ProductSale.customer_id == b.customer_id,
             ProductSale.deleted_at.is_(None)).all():
         groups[f"product_{ps.id}"] = {
-            "task_name": prod.name, "order_no": "/", "channel": "", "operator": "",
+            "task_name": prod.name, "order_no": ps.region or "", "channel": "", "operator": "",
             "qty": int(ps.qty or 0), "amount": float(ps.sales_amount or 0),
             "purchase_price": float(ps.purchase_price or 0),
             "sales_price": float(ps.sales_price or 0), "is_product": True,

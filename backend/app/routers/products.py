@@ -341,7 +341,7 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
         raise HTTPException(status_code=422, detail="缺少必需表头：日期、客户、地区、产品")
 
     customers = db.query(Customer).filter(Customer.ctype == "downstream").all()
-    cust_by_code = {c.code: c for c in customers if c.code}
+    cust_by_name = {c.name: c for c in customers if c.name}
     products = db.query(Product).all()
     prod_by_name = {p.name: p for p in products if p.name}
 
@@ -364,9 +364,9 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
         if not sale_date:
             errors.append(f"日期无效：{date_str}")
             continue
-        cust = cust_by_code.get(cust_str)
+        cust = cust_by_name.get(cust_str)
         if not cust:
-            errors.append(f"客户编号不存在：{cust_str}")
+            errors.append(f"客户名称不存在：{cust_str}")
             continue
         if not region_str:
             errors.append(f"地区为空")
@@ -461,19 +461,38 @@ def export_product_sales(db: Session = Depends(get_db), _=Depends(get_current_us
         qy = qy.filter(ProductSale.sale_date == d)
     rows = qy.order_by(ProductSale.id).all()
     import openpyxl
+    import copy
     tpl = ensure_product_sale_template(db)
     data = tpl.file_data if tpl.file_data else _build_product_sale_template_xlsx()
     wb = openpyxl.load_workbook(io.BytesIO(data))
     ws = wb.active
+    # 捕获模版示例行的样式（边框/字体/对齐/数字格式），导出数据行时复用，保持与模版一致
+    style_src_row = 2 if ws.max_row >= 2 else 1
+    tpl_styles = []
+    for j in range(1, 8):
+        c = ws.cell(row=style_src_row, column=j)
+        tpl_styles.append({
+            "font": copy.copy(c.font), "fill": copy.copy(c.fill),
+            "border": copy.copy(c.border), "alignment": copy.copy(c.alignment),
+            "number_format": c.number_format,
+        })
     if ws.max_row > 1:
         ws.delete_rows(2, ws.max_row - 1)  # 删除示例行，保留表头与格式
     prod_map = {p.id: p.name for p in db.query(Product).all()}
-    cust_code = {c.id: c.code for c in db.query(Customer).all()}
+    cust_name = {c.id: c.name for c in db.query(Customer).all()}
     for s in rows:
         ws.append([s.sale_date.strftime("%Y-%m-%d") if s.sale_date else "",
-                   cust_code.get(s.customer_id, ""), s.region or "",
+                   cust_name.get(s.customer_id, ""), s.region or "",
                    prod_map.get(s.product_id, ""),
                    float(s.purchase_price or 0), float(s.sales_price or 0), s.qty])
+        r = ws.max_row
+        for j, st in enumerate(tpl_styles, 1):
+            cell = ws.cell(row=r, column=j)
+            cell.font = copy.copy(st["font"])
+            cell.fill = copy.copy(st["fill"])
+            cell.border = copy.copy(st["border"])
+            cell.alignment = copy.copy(st["alignment"])
+            cell.number_format = st["number_format"]
     buf = io.BytesIO()
     wb.save(buf)
     filename = f"产品销售{('_' + date) if date else ''}.xlsx"
@@ -492,7 +511,7 @@ def _build_product_sale_template_xlsx():
     ws = wb.active
     ws.title = "产品销售导入"
     ws.append(["日期", "客户", "地区", "产品", "进货单价", "出货单价", "数量"])
-    ws.append(["2026-01-01", "660001", "浙江", "产品名称", 1.00, 2.00, 10])
+    ws.append(["2026-01-01", "客户名称", "浙江", "产品名称", 1.00, 2.00, 10])
     for col in ("A", "B", "C", "D", "E", "F", "G"):
         ws.column_dimensions[col].width = 18
     buf = io.BytesIO()
@@ -509,7 +528,7 @@ def ensure_product_sale_template(db):
                      file_type="xlsx",
                      description="产品销售订单导入模版：表头为 日期/客户/地区/产品/进货单价/出货单价/数量。"
                                  "日期支持 YYYY-MM-DD、YYYY/MM/DD、YYYYMMDD、YYMMDD、MMDD；"
-                                 "客户填客户管理中的客户编号；地区填省份或地市名称（需在地区主数据中存在）；"
+                                 "客户填客户管理中的客户名称；地区填省份或地市名称（需在地区主数据中存在）；"
                                  "产品填产品管理中的产品名称。",
                      status=1)
         db.add(t)
@@ -530,7 +549,7 @@ def ensure_product_sale_template(db):
             t.file_data = _build_product_sale_template_xlsx()
             t.description = "产品销售订单导入模版：表头为 日期/客户/地区/产品/进货单价/出货单价/数量。" \
                             "日期支持 YYYY-MM-DD、YYYY/MM/DD、YYYYMMDD、YYMMDD、MMDD；" \
-                            "客户填客户管理中的客户编号；地区填省份或地市名称（需在地区主数据中存在）；" \
+                            "客户填客户管理中的客户名称；地区填省份或地市名称（需在地区主数据中存在）；" \
                             "产品填产品管理中的产品名称。"
             db.commit()
     return t
