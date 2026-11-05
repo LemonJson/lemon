@@ -7,6 +7,7 @@ import threading
 import uuid
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from typing import List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -1500,6 +1501,28 @@ def _pinyin_key(s):
         return str(s or "")
 
 
+@lru_cache(maxsize=64)
+def _light_tpl_bytes(tpl_bytes: bytes) -> bytes:
+    """预处理出数模版：删除表头行以下的预置空行，返回轻量模版字节（按模版内容缓存）。
+
+    部分出数模版（MB-005/006/007 等）预置了数万行空行，导致 load_workbook 解析慢且
+    每次生成文件都要 delete_rows 大段空行。这里仅删除空行，保留表头行及其样式，
+    不改动任何可见内容，功能与原模版完全一致。
+    """
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(tpl_bytes))
+    ws = wb.active
+    header_row = 1
+    headers = [c.value for c in ws[header_row]]
+    if all(h is None or str(h).strip() == "" for h in headers):
+        header_row = 2
+    if ws.max_row > header_row:
+        ws.delete_rows(header_row + 1, ws.max_row - header_row)
+    bio = io.BytesIO()
+    wb.save(bio)
+    return bio.getvalue()
+
+
 def _fill_mb030_file(db, tpl_bytes, records):
     """MB-030 产品出数模版：数据代码/本次申请平台/联系方式/客户名称/本次状态/近期申请平台A/B/C。
     数据代码 = LeMon_ + 二级品类编号 + 四位平台编号；数据按数据代码排序；数据单元格绿色背景+边框。"""
@@ -1568,13 +1591,13 @@ def _fill_distribute_file(db, tpl_bytes, tpl_code, records):
     if tpl_code == "MB-030":
         return _fill_mb030_file(db, tpl_bytes, records)
     from openpyxl import load_workbook, Workbook
-    from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
+    from openpyxl.styles import Alignment, Border, Side, Font, PatternFill, NamedStyle
     from openpyxl.utils import get_column_letter
     from ..tidabiao import _header_field, _cell_value_split
     has_collision = any(rec.get("check_collision") for rec in records)
     green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
     if tpl_bytes:
-        wb = load_workbook(io.BytesIO(tpl_bytes))
+        wb = load_workbook(io.BytesIO(_light_tpl_bytes(tpl_bytes)))
         ws = wb.active
         thin = Side(style="thin", color="000000")
         border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -1586,8 +1609,20 @@ def _fill_distribute_file(db, tpl_bytes, tpl_code, records):
             headers = [c.value for c in ws[header_row]]
         colmap = [(j, _header_field(h) if h else None) for j, h in enumerate(headers, 1)]
         hist_col = len(headers) + 1
+        src_font = ws.cell(row=header_row + 1, column=2).font if ws.max_row > header_row else None
         if ws.max_row > header_row:
             ws.delete_rows(header_row + 1, ws.max_row - header_row)
+        named_style = None
+        try:
+            ns = NamedStyle(name="_dd_data_style")
+            ns.border = border
+            ns.alignment = center
+            if src_font is not None:
+                ns.font = src_font
+            wb.add_named_style(ns)
+            named_style = "_dd_data_style"
+        except Exception:
+            named_style = None
         if has_collision:
             max_w = sum(2 if ord(ch) > 127 else 1 for ch in "近期申请记录")
             for rec in records:
@@ -1607,8 +1642,11 @@ def _fill_distribute_file(db, tpl_bytes, tpl_code, records):
                 kind, key = m
                 value = _cell_value_split(kind, key, rec, rec.get("url", ""))
                 cell = ws.cell(row=row, column=j, value=value)
-                cell.alignment = center
-                cell.border = border
+                if named_style:
+                    cell.style = named_style
+                else:
+                    cell.alignment = center
+                    cell.border = border
             if has_collision:
                 hist = "\n".join(rec.get("history") or [])
                 hcell = ws.cell(row=row, column=hist_col, value=hist)
@@ -2045,12 +2083,16 @@ def _build_daily_bills(db, date_obj, customer_ids=None):
                                              "unit": info["price"], "add_name": info["add_name"]})
         gg["qty"] += cnt
         gg["amount"] += eff_price * cnt
-    # 产品销售合并
-    for ps, prod in db.query(ProductSale, Product).join(
-            Product, ProductSale.product_id == Product.id).filter(
-            ProductSale.sale_date == date_obj,
-            ProductSale.deleted_at.is_(None),
-            Product.deleted_at.is_(None)).all():
+    # 产品销售合并（预加载涉及客户，消除逐行 N+1）
+    ps_rows = db.query(ProductSale, Product).join(
+        Product, ProductSale.product_id == Product.id).filter(
+        ProductSale.sale_date == date_obj,
+        ProductSale.deleted_at.is_(None),
+        Product.deleted_at.is_(None)).all()
+    ps_cids = {ps.customer_id for ps, _ in ps_rows if ps.customer_id}
+    ps_cust_map = {c.id: c for c in db.query(Customer).filter(
+        Customer.id.in_(ps_cids)).all()} if ps_cids else {}
+    for ps, prod in ps_rows:
         cid = ps.customer_id
         if not cid:
             continue
@@ -2058,7 +2100,7 @@ def _build_daily_bills(db, date_obj, customer_ids=None):
             continue
         cc = next((_cc for _cc, b in bills.items() if b.get("customer_id") == cid), None)
         if cc is None:
-            cust = db.query(Customer).filter(Customer.id == cid).first()
+            cust = ps_cust_map.get(cid)
             label = (f"{cust.code} {cust.name}".strip() if cust and cust.name else (cust.code or str(cid)))
             cc = cust.code if cust and cust.code else str(cid)
             bills[cc] = {"customer_id": cid, "cust_label": label, "qty": 0, "sales": 0.0,
@@ -2101,14 +2143,22 @@ def _regen_downstream_bills(db, date_obj, customer_ids, user_label=""):
     """重新生成指定客户在指定日期的下游账单（分数+产品销售合并），并同步客户余额"""
     ids = list(customer_ids) or []
     bills = _build_daily_bills(db, date_obj, ids)
+    needed = set(ids) | {b.get("customer_id") for b in bills.values() if b.get("customer_id")}
+    cust_map = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(needed)).all()} if needed else {}
+    existing_map = {}
+    if needed:
+        for b in db.query(Bill).filter(
+                Bill.customer_id.in_(needed), Bill.biz_date == date_obj,
+                Bill.deleted_at.is_(None)).order_by(Bill.id).all():
+            existing_map.setdefault(b.customer_id, b)
     handled = set()
     for cc, b in bills.items():
         cid = b.get("customer_id")
         if not cid:
             continue
         handled.add(cid)
-        cust = db.query(Customer).filter(Customer.id == cid).first()
-        existing = db.query(Bill).filter(Bill.customer_id == cid, Bill.biz_date == date_obj, Bill.deleted_at.is_(None)).first()
+        cust = cust_map.get(cid)
+        existing = existing_map.get(cid)
         balance = float(cust.balance) if cust and cust.balance is not None else 0
         # 重复生成时：把上次已扣的销售金额加回来，恢复到扣减前的基础余额，避免重复扣减
         if existing and existing.sales is not None:
@@ -2138,9 +2188,9 @@ def _regen_downstream_bills(db, date_obj, customer_ids, user_label=""):
     for cid in ids:
         if cid in handled:
             continue
-        existing = db.query(Bill).filter(Bill.customer_id == cid, Bill.biz_date == date_obj, Bill.deleted_at.is_(None)).first()
+        existing = existing_map.get(cid)
         if existing:
-            cust = db.query(Customer).filter(Customer.id == cid).first()
+            cust = cust_map.get(cid)
             if cust is not None and existing.sales is not None:
                 cust.balance = round(float(cust.balance or 0) + float(existing.sales), 2)
             existing.deleted_at = datetime.now()
@@ -2388,12 +2438,23 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
         try:
             # 7. 保存账单（按客户+日期 upsert；余额 = 客户余额 - 销售金额），并同步客户余额
             if not body.files_only:
+                up_items = _build_upstream_bills(db2, date_obj)
+                all_cids = set(b.get("customer_id") for b in bills.values() if b.get("customer_id")) | {
+                    item["up_id"] for item in up_items}
+                cust_map2 = {c.id: c for c in db2.query(Customer).filter(
+                    Customer.id.in_(all_cids)).all()} if all_cids else {}
+                bill_map2 = {}
+                if all_cids:
+                    for x in db2.query(Bill).filter(
+                            Bill.customer_id.in_(all_cids), Bill.biz_date == date_obj).order_by(Bill.id).all():
+                        bill_map2.setdefault(x.customer_id, x)
+
                 for cc, b in bills.items():
                     cid = b.get("customer_id")
                     if not cid:
                         continue
-                    cust = db2.query(Customer).filter(Customer.id == cid).first()
-                    existing = db2.query(Bill).filter(Bill.customer_id == cid, Bill.biz_date == date_obj).first()
+                    cust = cust_map2.get(cid)
+                    existing = bill_map2.get(cid)
                     balance = float(cust.balance) if cust and cust.balance is not None else 0
                     # 重复分发时：把上次已扣的销售金额加回来，恢复到扣减前的基础余额，避免重复扣减
                     if existing and existing.sales is not None:
@@ -2420,10 +2481,10 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
                         cust.balance = bill_balance
 
                 # 7.5 生成甲方账单数据（按甲方+日期 upsert；余额 = 甲方余额 - 销售金额），并同步甲方余额
-                for item in _build_upstream_bills(db2, date_obj):
+                for item in up_items:
                     up_id = item["up_id"]
-                    up = db2.query(Customer).filter(Customer.id == up_id).first()
-                    existing = db2.query(Bill).filter(Bill.customer_id == up_id, Bill.biz_date == date_obj).first()
+                    up = cust_map2.get(up_id)
+                    existing = bill_map2.get(up_id)
                     balance = float(up.balance) if up and up.balance is not None else 0
                     if existing and existing.sales is not None:
                         balance = round(balance + float(existing.sales), 2)
@@ -3705,7 +3766,8 @@ def generate_bills_zip(db: Session = Depends(get_db), _=Depends(get_current_user
     bills = _build_daily_bills(db, date_obj, selected_ids or None)
     mb031_tpl = db.query(Template).filter(Template.code == "MB-031").first()
     mb031_bytes = bytes(mb031_tpl.file_data) if mb031_tpl and mb031_tpl.file_data else None
-    cust_map = {c.id: c for c in db.query(Customer).all()}
+    cust_map = {c.id: c for c in db.query(Customer).filter(
+        Customer.id.in_({b.get("customer_id") for b in bills.values() if b.get("customer_id")})).all()}
 
     buf = io.BytesIO()
     date_str = date_obj.strftime("%m%d")
@@ -3856,6 +3918,7 @@ def _fill_mb031_bill(db, cust, summary_start, summary_end, detail_days, tpl_byte
 
     # 写汇总 sheet（表头第 1 行，数据从第 2 行开始）
     zebra1 = _find_zebra_rgb(ws1, 1)
+    zebra1_fill = PatternFill(fill_type="solid", fgColor=zebra1) if zebra1 else None
     r = 2
     bal = opening
     d = summary_start
@@ -3872,10 +3935,10 @@ def _fill_mb031_bill(db, cust, summary_start, summary_end, detail_days, tpl_byte
             # 无账单的日期：仅按当日充值/补数递推余额（销售为 0）
             bal = round(bal + bu + chong_rmb_by_day.get(d, 0.0), 2)
         rowvals = [d.strftime("%Y-%m-%d"), sales, bu, u, bal]
-        row_fill = PatternFill(fill_type="solid", fgColor=zebra1) if (zebra1 and idx % 2 == 1) else None
+        row_fill = zebra1_fill if idx % 2 == 1 else None
         for j, v in enumerate(rowvals, 1):
             cell = ws1.cell(row=r, column=j, value=v)
-            cell.font = copy(data_font1)
+            cell.font = data_font1
             cell.border = border
             cell.alignment = center
             if j >= 2:
@@ -3892,6 +3955,7 @@ def _fill_mb031_bill(db, cust, summary_start, summary_end, detail_days, tpl_byte
 
     # 每日明细 sheet：复制 yyyymmdd 模版，仅生成有明细或充值补数的日期（最近日期在前）
     zebra2 = _find_zebra_rgb(tpl_ws, 7)
+    zebra2_fill = PatternFill(fill_type="solid", fgColor=zebra2) if zebra2 else None
     for day in reversed(detail_days):
         info = recharge_info_by_day.get(day, [])
         rt_bills = rt_bills_by_day.get(day) if rt_bills_by_day else None
@@ -3926,10 +3990,10 @@ def _fill_mb031_bill(db, cust, summary_start, summary_end, detail_days, tpl_byte
             if has_add_name:
                 vals.append("/" if g.get("is_product") else ("是" if g.get("add_name") else "否"))
             vals.append(round(float(g.get("amount") or 0), 2))
-            row_fill = PatternFill(fill_type="solid", fgColor=zebra2) if (zebra2 and idx % 2 == 1) else None
+            row_fill = zebra2_fill if idx % 2 == 1 else None
             for j, v in enumerate(vals, 1):
                 cell = new_ws.cell(row=rr, column=j, value=v)
-                cell.font = copy(data_font2)
+                cell.font = data_font2
                 cell.border = border
                 cell.alignment = center
                 if row_fill is not None:
