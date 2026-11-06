@@ -195,6 +195,7 @@ export default function SimpleList({ kind }) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   })
   const [genBillEnd, setGenBillEnd] = useState('')
+  const [genBillCustomerIds, setGenBillCustomerIds] = useState([])
   const [checkModal, setCheckModal] = useState(false)
   const [checkDate, setCheckDate] = useState('')
   const [checkUpstream, setCheckUpstream] = useState('')
@@ -892,9 +893,10 @@ export default function SimpleList({ kind }) {
           p.set('start_date', genBillStart)
           p.set('end_date', genBillEnd)
         }
+        if (genBillCustomerIds.length) p.set('customer_ids', genBillCustomerIds.join(','))
         await downloadFile(`/api/bills/generate-bill?${p.toString()}`)
-        toast('代理账单已生成')
-      }, '正在生成代理账单…')
+        toast('账单已生成')
+      }, '正在生成账单')
     } catch (e) { showError(e.message) }
   }
 
@@ -1055,7 +1057,7 @@ export default function SimpleList({ kind }) {
         {cfg.imp && can(`${cfg.perm}:import`) && <button className="btn" onClick={() => fileRef.current.click()}>导入 Excel</button>}
         {cfg.export && can('daily:export') && <button className="btn green" onClick={() => setExportModal(true)}>导出数据</button>}
         {kind === 'daily' && can('daily:batch_delete') && <button className="btn danger" onClick={() => setBatchDelModal(true)}>⚠️ 批量删除</button>}
-        {cfg.billExp && can('bill:generate') && <button className="btn orange" onClick={() => setGenBillModal(true)}>生成账单</button>}
+        {cfg.billExp && can('bill:generate') && <button className="btn orange" onClick={() => { setGenBillCustomerIds(customers.filter(c => c.ctype === 'upstream' || c.ctype === 'downstream').map(c => c.id)); setGenBillModal(true) }}>生成账单</button>}
         {cfg.simple && can(`${cfg.perm}:create`) && <button className="btn primary" onClick={() => setSimpleModal({ name: '', status: 1 })}>+ 新增</button>}
         {cfg.addUrl && can('parts:create') && <button className="btn primary" onClick={openAddUrl}>+ 新增 URL</button>}
         {cfg.clear && can(`${cfg.perm}:clear`) && <button className="btn danger" onClick={clearData}>⚠️ 清空数据</button>}
@@ -1427,8 +1429,16 @@ export default function SimpleList({ kind }) {
         </Modal>
       )}
 
-      {genBillModal && (
-        <Modal title="生成代理账单" onClose={() => setGenBillModal(false)}>
+      {genBillModal && (() => {
+        const billCustomers = customers
+          .filter(c => c.ctype === 'upstream' || c.ctype === 'downstream')
+          .sort((a, b) => (parseInt(a.code, 10) || 0) - (parseInt(b.code, 10) || 0))
+        const allChecked = billCustomers.length > 0 && billCustomers.every(c => genBillCustomerIds.includes(c.id))
+        function toggleAll() {
+          setGenBillCustomerIds(allChecked ? [] : billCustomers.map(c => c.id))
+        }
+        return (
+        <Modal title="生成账单" onClose={() => setGenBillModal(false)}>
           <div className="note">特定日期：汇总从月初第一天到该日、明细只生成该日；日期区间：汇总与明细覆盖整个区间（每天一页明细）。使用 MB-031 模版，打包 ZIP 下载。</div>
           <div className="field" style={{ marginBottom: 12 }}><label>生成类型</label>
             <select value={genBillType} onChange={e => setGenBillType(e.target.value)}>
@@ -1446,12 +1456,30 @@ export default function SimpleList({ kind }) {
                 <input type="date" value={genBillEnd} onChange={e => setGenBillEnd(e.target.value)} /></div>
             </div>
           )}
+          <div className="field" style={{ marginBottom: 14 }}>
+            <label>客户（默认全部，点击名称选中 / 取消）</label>
+            <div className="agent-list">
+              <button type="button" className="agent-chip agent-chip-all" onClick={toggleAll}>{allChecked ? '全不选' : '全选'}</button>
+              {billCustomers.map(c => {
+                const on = genBillCustomerIds.includes(c.id)
+                return (
+                  <button type="button" key={c.id} className={`agent-chip ${on ? 'on' : ''}`} onClick={() => {
+                    setGenBillCustomerIds(ids => ids.includes(c.id) ? ids.filter(x => x !== c.id) : [...ids, c.id])
+                  }}>
+                    {c.code} {c.name}
+                  </button>
+                )
+              })}
+              {billCustomers.length === 0 && <div className="empty">暂无客户</div>}
+            </div>
+          </div>
           <div className="foot">
             <button className="btn" onClick={() => setGenBillModal(false)}>取消</button>
             <button className="btn primary" onClick={() => doGenerateBill().catch(e => showError(e.message))}>生成</button>
           </div>
         </Modal>
-      )}
+        )
+      })()}
 
       {checkModal && (
         <Modal title="工单检查" onClose={() => setCheckModal(false)} wide style={{ width: 1092 }}>

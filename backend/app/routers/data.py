@@ -4042,8 +4042,10 @@ def _fill_mb031_bill(db, cust, summary_start, summary_end, detail_days, tpl_byte
 
 
 @router.get("/bills/generate-bill")
-def generate_bill_files(db: Session = Depends(get_db), _=Depends(get_current_user), start_date: str = "", end_date: str = ""):
-    """生成代理账单（MB-031 模版）：可指定日期区间或单日；汇总 sheet + 每日明细 sheet；并附带甲方账单（MB-032）打包 ZIP"""
+def generate_bill_files(db: Session = Depends(get_db), _=Depends(get_current_user),
+                        start_date: str = "", end_date: str = "", customer_ids: str = ""):
+    """生成代理账单（MB-031 模版）：可指定日期区间或单日；汇总 sheet + 每日明细 sheet；并附带甲方账单（MB-032）打包 ZIP。
+    customer_ids：逗号分隔的下游代理 id，只生成所选代理账单；为空则生成全部代理账单。"""
     from urllib.parse import quote
     from fastapi.responses import Response
     import zipfile
@@ -4069,7 +4071,10 @@ def generate_bill_files(db: Session = Depends(get_db), _=Depends(get_current_use
     if not tpl or not tpl.file_data:
         raise HTTPException(status_code=404, detail="MB-031 账单模版不存在或未上传文件")
     tpl_bytes = bytes(tpl.file_data)
+    selected_ids = [int(x) for x in customer_ids.split(",") if x.strip().isdigit()] if customer_ids else []
     down_customers = db.query(Customer).filter(Customer.ctype == "downstream", Customer.deleted_at.is_(None)).order_by(Customer.code).all()
+    if selected_ids:
+        down_customers = [c for c in down_customers if c.id in selected_ids]
 
     # 预计算区间内每天的实时账单（按日一次，供所有代理共享，避免每个客户每天重复重建）
     rt_bills_by_day = {day: _build_daily_bills(db, day, None) for day in detail_days}
@@ -4088,7 +4093,7 @@ def generate_bill_files(db: Session = Depends(get_db), _=Depends(get_current_use
             used_names.add(filename)
             zf.writestr(filename, bio.read())
         # 甲方账单文件（MB-032 模版，按月，按结束日生成）
-        for filename, data in _build_upstream_bill_files(db, summary_start, summary_end, detail_days, date_label):
+        for filename, data in _build_upstream_bill_files(db, summary_start, summary_end, detail_days, date_label, selected_ids or None):
             fn = filename
             n = 1
             while fn in used_names:
