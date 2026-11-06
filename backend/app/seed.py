@@ -90,7 +90,7 @@ def seed(db):
         ("channel", "渠道管理", ["create:新增", "edit:编辑", "delete:删除"]),
         ("operator", "运营商管理", ["create:新增", "edit:编辑", "delete:删除"]),
         ("template", "模版管理", ["create:新增", "edit:编辑", "delete:删除", "upload:上传文件", "download:下载"]),
-        ("products", "产品管理", ["create:新增", "edit:编辑", "copy:复制", "delete:删除"]),
+        ("products", "产品管理", ["create:新增", "edit:编辑", "copy:复制", "delete:删除", "price:代理售价"]),
         ("account", "账户管理", ["create:新增账户", "edit:编辑", "reset:重置密码", "delete:删除", "role_perms:角色权限", "create_role:新增角色"]),
         ("config", "配置中心", ["save:保存", "reset_alert:重置预警"]),
     ]

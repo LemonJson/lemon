@@ -116,6 +116,7 @@ export const PERM_TREE = [
     { code: 'products:edit', label: '编辑' },
     { code: 'products:copy', label: '复制' },
     { code: 'products:delete', label: '删除' },
+    { code: 'products:price', label: '代理售价' },
   ] },
   { module: 'account', label: '账户管理', perm: 'account:view', buttons: [
     { code: 'account:create', label: '新增账户' },

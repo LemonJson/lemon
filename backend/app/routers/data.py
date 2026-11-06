@@ -647,7 +647,7 @@ def _extract_task_ids(fn, content):
 
 def _count_unmatched(db, file_list):
     """统计未匹配到订单的日活数据条数，返回 (条数, 未匹配工单明细列表)"""
-    order_tids = {r[0] for r in db.query(Order.task_id).all() if r[0]}
+    order_tids = {r[0] for r in db.query(Order.task_id).filter(Order.deleted_at.is_(None)).all() if r[0]}
     total = 0
     cnt = defaultdict(int)
     for fn, content in file_list:
@@ -2049,11 +2049,14 @@ def _build_daily_bills(db, date_obj, customer_ids=None):
             "operator": op.name if op else "", "cust_code": cust.code if cust else "",
             "cust_name": cust.name if cust else "", "price": float(order.price) if order.price is not None else 0,
             "customer_id": order.customer_id, "add_name": bool(order.add_name),
-            "upstream_price": up_price, "end_date": order.end_date,
+            "upstream_price": up_price, "end_date": order.end_date, "status": order.status,
+            "order_date": order.order_date,
         }
     selected = set(customer_ids) if customer_ids else None
     expired_tids = {tid for tid, info in orders_info.items()
-                    if info.get("end_date") and date_obj > info["end_date"] + timedelta(days=1)}
+                    if (info.get("end_date") and date_obj > info["end_date"] + timedelta(days=1))
+                    or (info.get("status") == "已停" and info.get("order_date")
+                        and date_obj > info["order_date"] + timedelta(days=1))}
     bills = {}
     for tid, cnt in rows:
         cnt = int(cnt or 0)
@@ -2246,6 +2249,8 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
             "order_no": order.order_no or "",
             "stop_date": order.stop_date,
             "end_date": order.end_date,
+            "order_date": order.order_date,
+            "status": order.status,
             "city": order.city or "",
             "province": order.province or "",
             "channel": ch.name if ch else "",
@@ -2281,9 +2286,12 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
         if not orders_info:
             raise HTTPException(status_code=404, detail=f"没有「截止日期={body.end_date}」的可分发订单")
 
-    # 截止日期过了 T+1（末次出数日期 end_date+1）之后仍在出数的数据：不分发、不记账
+    # 不分发、不记账的数据：截止日期过了 T+1（末次出数日期 end_date+1）仍在出数；
+    # 或已停订单且更新日期（order_date）过了 T+1
     expired_tids = {tid for tid, info in orders_info.items()
-                    if info.get("end_date") and date_obj > info["end_date"] + timedelta(days=1)}
+                    if (info.get("end_date") and date_obj > info["end_date"] + timedelta(days=1))
+                    or (info.get("status") == "已停" and info.get("order_date")
+                        and date_obj > info["order_date"] + timedelta(days=1))}
 
     # 2. 校验：小组名/一级代理 不能为空
     for tid, info in orders_info.items():
@@ -2446,7 +2454,8 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
                 bill_map2 = {}
                 if all_cids:
                     for x in db2.query(Bill).filter(
-                            Bill.customer_id.in_(all_cids), Bill.biz_date == date_obj).order_by(Bill.id).all():
+                            Bill.customer_id.in_(all_cids), Bill.biz_date == date_obj,
+                            Bill.deleted_at.is_(None)).order_by(Bill.id).all():
                         bill_map2.setdefault(x.customer_id, x)
 
                 for cc, b in bills.items():
@@ -2947,7 +2956,7 @@ def export_bills(db: Session = Depends(get_db), _=Depends(get_current_user),
 
     cust_map = {c.id: c for c in db.query(Customer).all()}
 
-    qy = db.query(Bill).order_by(Bill.biz_date, Bill.customer_id)
+    qy = db.query(Bill).filter(Bill.deleted_at.is_(None)).order_by(Bill.biz_date, Bill.customer_id)
     if customer_id:
         qy = qy.filter(Bill.customer_id == customer_id)
     if start_date:
@@ -3102,22 +3111,25 @@ def export_bills_summary(db: Session = Depends(get_db), _=Depends(get_current_us
     else:
         raise HTTPException(status_code=422, detail="请选择日期或日期区间")
 
-    up_customers = {c.id: c for c in db.query(Customer).filter(Customer.ctype == "upstream", Customer.status == 1).all()}
+    up_customers = {c.id: c for c in db.query(Customer).filter(Customer.ctype == "upstream", Customer.status == 1, Customer.deleted_at.is_(None)).all()}
     up_name_by_id = {c.id: c.name for c in up_customers.values()}
     ch_by_id = {ch.id: ch.name for ch in db.query(Channel).all()}
     op_by_id = {op.id: op.name for op in db.query(Operator).all()}
-    cust_map = {c.id: c for c in db.query(Customer).all()}
+    cust_map = {c.id: c for c in db.query(Customer).filter(Customer.deleted_at.is_(None)).all()}
     selected_ids = [int(x) for x in customer_ids.split(",") if x.strip().isdigit()] if customer_ids else []
     if selected_ids:
         up_customers = {c.id: c for c in db.query(Customer).filter(
             Customer.ctype == "upstream", Customer.status == 1,
+            Customer.deleted_at.is_(None),
             Customer.id.in_(selected_ids)).all()}
         up_name_by_id = {c.id: c.name for c in up_customers.values()}
         down_customers = db.query(Customer).filter(
             Customer.ctype == "downstream", Customer.status == 1,
+            Customer.deleted_at.is_(None),
             Customer.id.in_(selected_ids)).order_by(Customer.code).all()
     else:
-        down_customers = db.query(Customer).filter(Customer.ctype == "downstream", Customer.status == 1) \
+        down_customers = db.query(Customer).filter(Customer.ctype == "downstream", Customer.status == 1,
+                                                    Customer.deleted_at.is_(None)) \
             .order_by(Customer.code).all()
     price_map = defaultdict(dict)
     for p in db.query(CustomerPrice).filter(CustomerPrice.customer_id.in_(up_customers.keys())).all():
@@ -3365,10 +3377,11 @@ def _build_summary_wb_day(db, date_obj, customer_ids=None):
     from collections import defaultdict
 
     selected_ids = list(customer_ids) if customer_ids else []
-    up_customers = {c.id: c for c in db.query(Customer).filter(Customer.ctype == "upstream", Customer.status == 1).all()}
+    up_customers = {c.id: c for c in db.query(Customer).filter(Customer.ctype == "upstream", Customer.status == 1, Customer.deleted_at.is_(None)).all()}
     if selected_ids:
         up_customers = {c.id: c for c in db.query(Customer).filter(
             Customer.ctype == "upstream", Customer.status == 1,
+            Customer.deleted_at.is_(None),
             Customer.id.in_(selected_ids)).all()}
     up_name_by_id = {c.id: c.name for c in up_customers.values()}
     ch_by_id = {ch.id: ch.name for ch in db.query(Channel).all()}
@@ -3376,10 +3389,12 @@ def _build_summary_wb_day(db, date_obj, customer_ids=None):
     if selected_ids:
         down_customers = db.query(Customer).filter(
             Customer.ctype == "downstream", Customer.status == 1,
+            Customer.deleted_at.is_(None),
             Customer.id.in_(selected_ids)).order_by(Customer.code).all()
     else:
         down_customers = db.query(Customer).filter(
-            Customer.ctype == "downstream", Customer.status == 1).order_by(Customer.code).all()
+            Customer.ctype == "downstream", Customer.status == 1,
+            Customer.deleted_at.is_(None)).order_by(Customer.code).all()
     price_map = defaultdict(dict)
     for p in db.query(CustomerPrice).filter(CustomerPrice.customer_id.in_(up_customers.keys())).all():
         price_map[p.customer_id][(p.channel_id, p.operator_id)] = float(p.price)
@@ -3925,15 +3940,19 @@ def _fill_mb031_bill(db, cust, summary_start, summary_end, detail_days, tpl_byte
     idx = 0
     while d <= summary_end:
         b = bills.get(d)
-        sales = round(float(b.sales), 2) if b and b.sales is not None else 0.0
+        rt_day = rt_bills_by_day.get(d) if rt_bills_by_day else None
+        rt_b = rt_day.get(cust.code) if rt_day else None
+        if rt_b is not None and rt_b.get("sales") is not None:
+            sales = round(float(rt_b["sales"]), 2)
+        elif b is not None and b.sales is not None:
+            sales = round(float(b.sales), 2)
+        else:
+            sales = 0.0
         bu = round(bu_by_day.get(d, 0.0), 2)
         u = round(u_by_day.get(d, 0.0), 2)
-        if b is not None and b.balance is not None:
-            # 以 Bill.balance 为锚点（已含当日销售/充值/手动调整），避免逐日递推漂移
-            bal = round(float(b.balance), 2)
-        else:
-            # 无账单的日期：仅按当日充值/补数递推余额（销售为 0）
-            bal = round(bal + bu + chong_rmb_by_day.get(d, 0.0), 2)
+        # 余额按日期递推：前日余额 - 当天消耗 + 当天充值/补账（补账为负数）。
+        # 不依赖 Bill.balance 锚点（分数据快照会因补账录入时序错位到前一天）。
+        bal = round(bal - sales + bu + chong_rmb_by_day.get(d, 0.0), 2)
         rowvals = [d.strftime("%Y-%m-%d"), sales, bu, u, bal]
         row_fill = zebra1_fill if idx % 2 == 1 else None
         for j, v in enumerate(rowvals, 1):
@@ -4090,7 +4109,8 @@ def bill_detail(bid: int, db: Session = Depends(get_db), _=Depends(get_current_u
     c = db.query(Customer).filter(Customer.id == b.customer_id).first()
     rows = (db.query(DailyData, Order)
             .join(Order, DailyData.task_id == Order.task_id)
-            .filter(DailyData.biz_date == b.biz_date, Order.customer_id == b.customer_id)
+            .filter(DailyData.biz_date == b.biz_date, Order.customer_id == b.customer_id,
+                    Order.deleted_at.is_(None))
             .all())
     groups = {}
     for d, o in rows:
@@ -4275,14 +4295,14 @@ def daily_filter_options(db: Session = Depends(get_db), _=Depends(get_current_us
     # 一级品类 → 二级品类
     cat1 = []
     cat2_map = {}
-    for c in db.query(Category).filter(Category.level == 1).order_by(Category.id).all():
+    for c in db.query(Category).filter(Category.level == 1, Category.deleted_at.is_(None)).order_by(Category.id).all():
         cat1.append(c.name)
-        children = db.query(Category).filter(Category.level == 2, Category.parent_id == c.id).order_by(Category.id).all()
+        children = db.query(Category).filter(Category.level == 2, Category.parent_id == c.id, Category.deleted_at.is_(None)).order_by(Category.id).all()
         cat2_map[c.name] = [x.name for x in children]
     # 二级品类 → 平台
     platform_map = {}
-    for p in db.query(Platform).order_by(Platform.id).all():
-        c2 = db.query(Category).filter(Category.id == p.cat_id).first()
+    for p in db.query(Platform).filter(Platform.deleted_at.is_(None)).order_by(Platform.id).all():
+        c2 = db.query(Category).filter(Category.id == p.cat_id, Category.deleted_at.is_(None)).first()
         if c2:
             platform_map.setdefault(c2.name, []).append(p.name)
     # 一级代理 → 二级代理 / 渠道（customer 存储为「编号 名称」，用编号作为级联键）
@@ -4320,11 +4340,15 @@ def distinct_values(db: Session = Depends(get_db), _=Depends(get_current_user),
         return {"code": 0, "data": [], "msg": "ok"}
     table = {"daily_data": DailyData, "orders": Order, "fund": Fund, "customer": Customer}[model]
     col = getattr(table, field)
+    # 软删除模型（订单/客户）过滤垃圾箱数据
+    base_q = db.query(col)
+    if model in ("orders", "customer"):
+        base_q = base_q.filter(table.deleted_at.is_(None))
     # 日期字段不参与「空字符串」过滤（Date 列无法与 "" 比较）
     if field in ("start_date", "end_date"):
-        rows = db.query(col).filter(col.isnot(None)).distinct().order_by(col).all()
+        rows = base_q.filter(col.isnot(None)).distinct().order_by(col).all()
     else:
-        rows = db.query(col).filter(col.isnot(None), col != "").distinct().order_by(col).all()
+        rows = base_q.filter(col.isnot(None), col != "").distinct().order_by(col).all()
     return {"code": 0, "data": [str(r[0]) if r[0] is not None else "" for r in rows], "msg": "ok"}
 
 
@@ -4500,7 +4524,7 @@ def run_alert_scan(db: Session):
     """定时：按「订单预警天数」重建停单提醒（截止日期到期）；余额低于预警额度 -> 账单预警"""
     _regenerate_stop_alerts(db, with_notify=True)
     # 账单预警
-    for c in db.query(Customer).filter(Customer.ctype == "downstream", Customer.status == 1).all():
+    for c in db.query(Customer).filter(Customer.ctype == "downstream", Customer.status == 1, Customer.deleted_at.is_(None)).all():
         if c.warn_amount and (c.balance or 0) < c.warn_amount:
             if not db.query(Alert).filter(Alert.type == "账单预警", Alert.customer_id == c.id,
                                           Alert.status == "未处理").first():

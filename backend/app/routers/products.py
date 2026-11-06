@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import Product, ProductSale, Customer, Template
+from ..models import Product, ProductSale, Customer, Template, ProductCustomerPrice
 from ..pagination import paginate, ok_page
 from ..regions import PROVINCES, CITIES
 from ..utils import fmt_dt
@@ -108,6 +108,73 @@ def delete_product(pid: int, db: Session = Depends(get_db), _=Depends(get_curren
     return {"code": 0, "data": None, "msg": "已删除"}
 
 
+# ============ 产品代理售价 ============
+
+@router.get("/products/{pid}/customer-prices")
+def get_product_customer_prices(pid: int, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """返回某产品对所有下游代理的售价列表（未设置的代理 sales_price 为空，表示用默认价）"""
+    product = db.query(Product).filter(Product.id == pid).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    customers = db.query(Customer).filter(Customer.ctype == "downstream",
+                                          Customer.deleted_at.is_(None)).order_by(Customer.code).all()
+    price_map = {p.customer_id: float(p.sales_price or 0)
+                 for p in db.query(ProductCustomerPrice).filter(ProductCustomerPrice.product_id == pid).all()}
+    data = [{"customer_id": c.id,
+             "customer": f"{c.code} {c.name}".strip() if c.name else (c.code or str(c.id)),
+             "sales_price": price_map.get(c.id)} for c in customers]
+    return {"code": 0, "data": data, "msg": "ok"}
+
+
+@router.put("/products/{pid}/customer-prices")
+def save_product_customer_prices(pid: int, body: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """批量保存某产品的代理售价：body.items = [{customer_id, sales_price}]，售价为空/None 则删除该代理价（回落默认价）"""
+    product = db.query(Product).filter(Product.id == pid).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    items = body.get("items") or []
+    existing = {p.customer_id: p for p in db.query(ProductCustomerPrice).filter(
+        ProductCustomerPrice.product_id == pid).all()}
+    for it in items:
+        cid = it.get("customer_id")
+        if not cid:
+            continue
+        sp = it.get("sales_price")
+        sp = None if sp in (None, "") else _num(sp)
+        if sp is None:
+            if cid in existing:
+                db.delete(existing[cid])
+            continue
+        if cid in existing:
+            existing[cid].sales_price = sp
+        else:
+            db.add(ProductCustomerPrice(product_id=pid, customer_id=cid, sales_price=sp))
+    db.commit()
+    return {"code": 0, "data": None, "msg": "代理售价已保存"}
+
+
+@router.get("/product-customer-prices")
+def list_product_customer_prices(db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """返回全部产品-代理售价，供产品销售页面联动带价"""
+    rows = db.query(ProductCustomerPrice).all()
+    data = [{"product_id": p.product_id, "customer_id": p.customer_id,
+             "sales_price": float(p.sales_price or 0)} for p in rows]
+    return {"code": 0, "data": data, "msg": "ok"}
+
+
+def _resolve_prices(db, customer_id, product_id):
+    """解析销售价：进价=产品进货价；售价=该代理的代理价（有）否则产品默认出货价。返回 (进价, 售价)"""
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        return None, None
+    pp = float(p.purchase_price or 0)
+    cp = db.query(ProductCustomerPrice).filter(
+        ProductCustomerPrice.product_id == product_id,
+        ProductCustomerPrice.customer_id == customer_id).first()
+    sp = float(cp.sales_price) if cp and cp.sales_price is not None else float(p.default_sales_price or 0)
+    return pp, sp
+
+
 # ============ 产品销售订单 ============
 
 @router.get("/product-sales")
@@ -181,9 +248,14 @@ def create_product_sale(body: dict, db: Session = Depends(get_db), user=Depends(
         raise HTTPException(status_code=422, detail="请选择地区")
     if region not in ALL_REGIONS:
         raise HTTPException(status_code=422, detail=f"地区不存在：{region}")
-    qty, pp, sp, sales_amount, profit = _calc(body.get("qty"),
-                                              body.get("purchase_price"),
-                                              body.get("sales_price"))
+    pp_raw, sp_raw = body.get("purchase_price"), body.get("sales_price")
+    if pp_raw in (None, "") or sp_raw in (None, ""):
+        rpp, rsp = _resolve_prices(db, body.get("customer_id"), body.get("product_id"))
+        if pp_raw in (None, ""):
+            pp_raw = rpp
+        if sp_raw in (None, ""):
+            sp_raw = rsp
+    qty, pp, sp, sales_amount, profit = _calc(body.get("qty"), pp_raw, sp_raw)
     s = ProductSale(sale_date=_date(sale_date), customer_id=body.get("customer_id"),
                     product_id=body.get("product_id"), region=region, qty=qty,
                     purchase_price=pp, sales_price=sp,
@@ -269,9 +341,14 @@ def save_product_sales_batch(body: dict, db: Session = Depends(get_db), user=Dep
         product_id = r.get("product_id")
         if not customer_id or not product_id:
             raise HTTPException(status_code=422, detail="请选择客户和产品")
-        qty, pp, sp, sales_amount, profit = _calc(r.get("qty"),
-                                                  r.get("purchase_price"),
-                                                  r.get("sales_price"))
+        pp_raw, sp_raw = r.get("purchase_price"), r.get("sales_price")
+        if pp_raw in (None, "") or sp_raw in (None, ""):
+            rpp, rsp = _resolve_prices(db, customer_id, product_id)
+            if pp_raw in (None, ""):
+                pp_raw = rpp
+            if sp_raw in (None, ""):
+                sp_raw = rsp
+        qty, pp, sp, sales_amount, profit = _calc(r.get("qty"), pp_raw, sp_raw)
         sid = r.get("id")
         s = None
         if sid:
@@ -341,7 +418,12 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
         raise HTTPException(status_code=422, detail="缺少必需表头：日期、客户、地区、产品")
 
     customers = db.query(Customer).filter(Customer.ctype == "downstream").all()
-    cust_by_name = {c.name: c for c in customers if c.name}
+    cust_by_name = {}
+    for c in customers:
+        if c.name:
+            cust_by_name[c.name] = c
+        if c.code:
+            cust_by_name[str(c.code).strip()] = c
     products = db.query(Product).all()
     prod_by_name = {p.name: p for p in products if p.name}
 
@@ -353,16 +435,19 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
         def getv(i):
             return values[i] if i is not None and i < len(values) else None
 
-        date_str = "" if date_col is None else str(getv(date_col) or "").strip()
-        if date_str == "":
+        date_raw = getv(date_col)
+        if date_raw is None or str(date_raw).strip() == "":
             continue  # 日期列为空的行直接跳过，不检查不导入
-        cust_str = "" if cust_col is None else str(getv(cust_col) or "").strip()
+        cust_raw = getv(cust_col)
+        if isinstance(cust_raw, float) and cust_raw.is_integer():
+            cust_raw = int(cust_raw)
+        cust_str = "" if cust_raw is None else str(cust_raw).strip()
         prod_str = "" if prod_col is None else str(getv(prod_col) or "").strip()
         region_str = "" if region_col is None else str(getv(region_col) or "").strip()
 
-        sale_date = _date(date_str)
+        sale_date = _date(date_raw)
         if not sale_date:
-            errors.append(f"日期无效：{date_str}")
+            errors.append(f"日期无效：{date_raw}")
             continue
         cust = cust_by_name.get(cust_str)
         if not cust:
@@ -389,22 +474,36 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
 
         pp_raw = getv(pp_col)
         pp_str = "" if pp_raw is None else str(pp_raw).strip()
-        if pp_str == "":
-            pp = 0.0
-        else:
+        sp_raw = getv(sp_col)
+        sp_str = "" if sp_raw is None else str(sp_raw).strip()
+
+        # 价格留空时自动带出：进价=产品进货价，售价=代理售价（无则默认出货价）
+        rpp = rsp = None
+        if pp_str == "" or sp_str == "":
+            rpp, rsp = _resolve_prices(db, cust.id, prod.id)
+
+        # 进货单价
+        if pp_str != "":
             pp_num = _parse_num(pp_raw)
             if pp_num is None or pp_num < 0:
                 errors.append(f"进货单价无效：{pp_str}")
                 continue
             pp = pp_num
+        else:
+            pp = rpp if rpp is not None else 0.0
 
-        sp_raw = getv(sp_col)
-        sp_str = "" if sp_raw is None else str(sp_raw).strip()
-        sp_num = _parse_num(sp_raw)
-        if sp_str == "" or sp_num is None or sp_num <= 0:
-            errors.append(f"出货单价无效：{sp_str}")
-            continue
-        sp = sp_num
+        # 出货单价
+        if sp_str != "":
+            sp_num = _parse_num(sp_raw)
+            if sp_num is None or sp_num <= 0:
+                errors.append(f"出货单价无效：{sp_str}")
+                continue
+            sp = sp_num
+        else:
+            sp = rsp if rsp is not None else 0.0
+            if sp <= 0:
+                errors.append(f"出货单价无效：产品未设置代理售价或默认售价")
+                continue
 
         sales_amount = round(qty * sp, 2)
         profit = round(qty * (sp - pp), 2)
@@ -452,7 +551,7 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
 @router.get("/product-sales/export")
 def export_product_sales(db: Session = Depends(get_db), _=Depends(get_current_user), date: str = ""):
     """导出产品销售为 Excel（基于导入模版 MB-PS-IMPORT 文件，保留其格式，可再导入）：传 date 只导该日期，不传导全部"""
-    qy = db.query(ProductSale)
+    qy = db.query(ProductSale).filter(ProductSale.deleted_at.is_(None))
     if date:
         try:
             d = datetime.strptime(date, "%Y-%m-%d").date()
@@ -469,7 +568,7 @@ def export_product_sales(db: Session = Depends(get_db), _=Depends(get_current_us
     # 捕获模版示例行的样式（边框/字体/对齐/数字格式），导出数据行时复用，保持与模版一致
     style_src_row = 2 if ws.max_row >= 2 else 1
     tpl_styles = []
-    for j in range(1, 8):
+    for j in range(1, 6):
         c = ws.cell(row=style_src_row, column=j)
         tpl_styles.append({
             "font": copy.copy(c.font), "fill": copy.copy(c.fill),
@@ -483,8 +582,7 @@ def export_product_sales(db: Session = Depends(get_db), _=Depends(get_current_us
     for s in rows:
         ws.append([s.sale_date.strftime("%Y-%m-%d") if s.sale_date else "",
                    cust_name.get(s.customer_id, ""), s.region or "",
-                   prod_map.get(s.product_id, ""),
-                   float(s.purchase_price or 0), float(s.sales_price or 0), s.qty])
+                   prod_map.get(s.product_id, ""), s.qty])
         r = ws.max_row
         for j, st in enumerate(tpl_styles, 1):
             cell = ws.cell(row=r, column=j)
@@ -505,14 +603,14 @@ PS_IMPORT_TEMPLATE_CODE = "MB-PS-IMPORT"
 
 
 def _build_product_sale_template_xlsx():
-    """生成产品销售导入模版（表头 + 示例行）"""
+    """生成产品销售导入模版（表头 + 示例行）：日期/客户/地区/产品/数量，价格由系统自动带出"""
     import openpyxl
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "产品销售导入"
-    ws.append(["日期", "客户", "地区", "产品", "进货单价", "出货单价", "数量"])
-    ws.append(["2026-01-01", "客户名称", "浙江", "产品名称", 1.00, 2.00, 10])
-    for col in ("A", "B", "C", "D", "E", "F", "G"):
+    ws.append(["日期", "客户", "地区", "产品", "数量"])
+    ws.append(["2026-01-01", "客户名称", "浙江", "产品名称", 10])
+    for col in ("A", "B", "C", "D", "E"):
         ws.column_dimensions[col].width = 18
     buf = io.BytesIO()
     wb.save(buf)
@@ -526,31 +624,36 @@ def ensure_product_sale_template(db):
         t = Template(ttype="产品销售导入模版", tpl_type="其他", code=PS_IMPORT_TEMPLATE_CODE,
                      name="产品销售导入模版.xlsx", file_data=_build_product_sale_template_xlsx(),
                      file_type="xlsx",
-                     description="产品销售订单导入模版：表头为 日期/客户/地区/产品/进货单价/出货单价/数量。"
+                     description="产品销售订单导入模版：表头为 日期/客户/地区/产品/数量。"
                                  "日期支持 YYYY-MM-DD、YYYY/MM/DD、YYYYMMDD、YYMMDD、MMDD；"
                                  "客户填客户管理中的客户名称；地区填省份或地市名称（需在地区主数据中存在）；"
-                                 "产品填产品管理中的产品名称。",
+                                 "产品填产品管理中的产品名称；价格由系统自动带出："
+                                 "进价为产品进货价，售价为该代理售价（未设代理价则用默认出货价）。",
                      status=1)
         db.add(t)
         db.commit()
     else:
-        # 模版为自动生成的简单表头，若缺少地区列则同步为最新列
+        # 模版为自动生成的简单表头，若缺少地区列或含价格列则同步为最新列
         needs_update = t.file_data is None
         if not needs_update:
             import openpyxl
             try:
                 wb = openpyxl.load_workbook(io.BytesIO(t.file_data), read_only=True)
                 hdr = [c.value for c in wb.active[1]]
-                needs_update = "地区" not in hdr
+                needs_update = "地区" not in hdr or "进货单价" in hdr or "出货单价" in hdr
                 wb.close()
             except Exception:
                 needs_update = True
+        # 旧版本说明不含「代理售价」提示时，同步更新模版与说明（价格列可留空自动带价）
+        if not needs_update:
+            needs_update = "代理售价" not in (t.description or "")
         if needs_update:
             t.file_data = _build_product_sale_template_xlsx()
-            t.description = "产品销售订单导入模版：表头为 日期/客户/地区/产品/进货单价/出货单价/数量。" \
+            t.description = "产品销售订单导入模版：表头为 日期/客户/地区/产品/数量。" \
                             "日期支持 YYYY-MM-DD、YYYY/MM/DD、YYYYMMDD、YYMMDD、MMDD；" \
                             "客户填客户管理中的客户名称；地区填省份或地市名称（需在地区主数据中存在）；" \
-                            "产品填产品管理中的产品名称。"
+                            "产品填产品管理中的产品名称；价格由系统自动带出：" \
+                            "进价为产品进货价，售价为该代理售价（未设代理价则用默认出货价）。"
             db.commit()
     return t
 
@@ -591,7 +694,9 @@ def _parse_num(v):
 
 
 def _date(v):
-    """解析日期：支持 YYYY-MM-DD / YYYY/MM/DD / YYYYMMDD / YYMMDD / MMDD / datetime 对象"""
+    """解析日期：宽松支持多种形式。
+    支持：datetime/date 对象；YYYY-MM-DD、YYYY/MM/DD、YYYY.MM.DD、YYYY年MM月DD日；
+    YYYYMMDD、YYMMDD、MMDD、MM-DD、MM/DD、MM月DD日（缺年份用当前年）；带时间的日期字符串。"""
     if v is None:
         return None
     if isinstance(v, datetime):
@@ -601,7 +706,12 @@ def _date(v):
     s = str(v).strip()
     if not s:
         return None
-    digits = s.replace(".", "")
+    # 去掉时间部分（如 "2026-11-04 00:00:00" / "2026-11-04T00:00:00"）
+    s = re.split(r"[ T]", s, maxsplit=1)[0].strip()
+    if not s:
+        return None
+    # 纯数字（含 . / - 分隔的纯数字）：YYYYMMDD / YYMMDD / MMDD
+    digits = s.replace(".", "").replace("/", "").replace("-", "")
     if digits.isdigit():
         n = len(digits)
         if n == 4:  # MMDD → 用当前年
@@ -610,10 +720,18 @@ def _date(v):
             return _safe_date(2000 + int(digits[:2]), int(digits[2:4]), int(digits[4:6]))
         if n == 8:  # YYYYMMDD
             return _safe_date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
-    s2 = s.replace("/", "-").replace("年", "-").replace("月", "-").replace("日", "")
+    # 文本日期：统一分隔符后按「年月日」或「月日」（缺年补当前年）解析
+    s2 = s.replace("年", "-").replace("月", "-").replace("日", "").replace("/", "-").replace(".", "-")
+    parts = [p.strip() for p in s2.split("-") if p.strip() != ""]
+    if len(parts) == 3:
+        y, m, d = parts
+    elif len(parts) == 2:
+        y, m, d = str(date.today().year), parts[0], parts[1]
+    else:
+        return None
     try:
-        return datetime.strptime(s2, "%Y-%m-%d").date()
-    except ValueError:
+        return _safe_date(int(y), int(m), int(d))
+    except (ValueError, TypeError):
         return None
 
 

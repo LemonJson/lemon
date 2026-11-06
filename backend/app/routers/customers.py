@@ -83,11 +83,11 @@ def customer_detail(cid: int, db: Session = Depends(get_db), _=Depends(get_curre
     if not c:
         raise HTTPException(status_code=404, detail="客户不存在")
     if c.ctype == "upstream":
-        total_supply = db.query(func.coalesce(func.sum(Order.qty), 0)).filter(Order.upstream_id == cid).scalar() or 0
+        total_supply = db.query(func.coalesce(func.sum(Order.qty), 0)).filter(Order.upstream_id == cid, Order.deleted_at.is_(None)).scalar() or 0
     else:
-        total_supply = db.query(func.coalesce(func.sum(Order.qty), 0)).filter(Order.customer_id == cid).scalar() or 0
-    total_sales = db.query(func.coalesce(func.sum(Bill.sales), 0)).filter(Bill.customer_id == cid).scalar() or 0
-    total_profit = db.query(func.coalesce(func.sum(Bill.profit), 0)).filter(Bill.customer_id == cid).scalar() or 0
+        total_supply = db.query(func.coalesce(func.sum(Order.qty), 0)).filter(Order.customer_id == cid, Order.deleted_at.is_(None)).scalar() or 0
+    total_sales = db.query(func.coalesce(func.sum(Bill.sales), 0)).filter(Bill.customer_id == cid, Bill.deleted_at.is_(None)).scalar() or 0
+    total_profit = db.query(func.coalesce(func.sum(Bill.profit), 0)).filter(Bill.customer_id == cid, Bill.deleted_at.is_(None)).scalar() or 0
     d = _customer_dict(c)
     d.update({"total_supply": float(total_supply), "total_sales": float(total_sales), "total_profit": float(total_profit)})
     return {"code": 0, "data": d, "msg": "ok"}
@@ -247,8 +247,8 @@ DPI_OPERATORS = ["移动", "联通", "电信"]
 
 @router.get("/{cid}/prices")
 def list_prices(cid: int, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    channels = db.query(Channel).filter(Channel.status == 1).all()
-    operator_ids = {op.name: op.id for op in db.query(Operator).filter(Operator.status == 1).all()}
+    channels = db.query(Channel).filter(Channel.status == 1, Channel.deleted_at.is_(None)).all()
+    operator_ids = {op.name: op.id for op in db.query(Operator).filter(Operator.status == 1, Operator.deleted_at.is_(None)).all()}
     prices = {}
     for p in db.query(CustomerPrice).filter(CustomerPrice.customer_id == cid).all():
         prices[(p.channel_id, p.operator_id)] = float(p.price)

@@ -2,7 +2,8 @@
 from datetime import datetime
 
 from sqlalchemy import (Integer, Boolean, Column, Date, DateTime, ForeignKey,
-                        Integer, LargeBinary, Numeric, SmallInteger, String, Table, Text)
+                        Integer, LargeBinary, Numeric, SmallInteger, String, Table, Text,
+                        UniqueConstraint)
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -501,6 +502,16 @@ class ProductSale(Base, AuditMixin, SoftDeleteMixin):
     sales_amount = Column(Numeric(14, 2), default=0)       # 销售金额（计算）
     profit = Column(Numeric(14, 2), default=0)             # 利润（计算）
     note = Column(Text)
+
+
+class ProductCustomerPrice(Base, TimestampMixin):
+    """产品对不同代理（下游客户）设定的销售单价；销售时优先取该代理价，无则用产品默认出货价"""
+    __tablename__ = "product_customer_price"
+    __table_args__ = (UniqueConstraint("product_id", "customer_id", name="uq_product_customer_price"),)
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("product.id"), nullable=False)
+    customer_id = Column(Integer, ForeignKey("customer.id"), nullable=False)
+    sales_price = Column(Numeric(14, 4), default=0)
 
 
 # ============ 业务：每日账单（工作台） ============

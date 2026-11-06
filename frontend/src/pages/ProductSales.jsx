@@ -3,6 +3,7 @@ import { api, uploadFile, downloadFile } from '../api'
 import { useToast, useConfirm, Modal, ClearableInput } from '../components/ui'
 import { useColumnConfig } from '../components/columns'
 import { useButtonPerm } from '../buttonPerms'
+import ProductManager from '../components/ProductManager'
 
 const IconColumns = (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="12" y1="3" x2="12" y2="21" /><line x1="8" y1="3" x2="8" y2="21" /><line x1="16" y1="3" x2="16" y2="21" /></svg>
@@ -55,9 +56,11 @@ export default function ProductSales() {
   const [productSales, setProductSales] = useState([])
   const [products, setProducts] = useState([])
   const [customers, setCustomers] = useState([])
+  const [customerPriceMap, setCustomerPriceMap] = useState({})
   const [regions, setRegions] = useState([])
   const [psImportResult, setPsImportResult] = useState(null)
   const [psExportModal, setPsExportModal] = useState(false)
+  const [showProductManager, setShowProductManager] = useState(false)
   const [psDate, setPsDate] = useState(() => fmt(new Date()))
   const psFileRef = useRef(null)
   const today = fmt(new Date())
@@ -74,9 +77,21 @@ export default function ProductSales() {
     }).catch(() => {})
   }
 
+  function loadProductsAndPrices() {
+    api.get('/api/products?per_page=1000').then(r => setProducts(r.data?.rows || [])).catch(() => {})
+    api.get('/api/product-customer-prices').then(r => {
+      const map = {}
+      ;(r.data || []).forEach(x => {
+        if (!map[x.product_id]) map[x.product_id] = {}
+        map[x.product_id][x.customer_id] = x.sales_price
+      })
+      setCustomerPriceMap(map)
+    }).catch(() => {})
+  }
+
   useEffect(() => {
     loadProductSales()
-    api.get('/api/products?per_page=1000').then(r => setProducts(r.data?.rows || [])).catch(() => {})
+    loadProductsAndPrices()
     api.get('/api/customers?per_page=1000').then(r => setCustomers(r.data?.rows?.filter(c => c.ctype === 'downstream').sort((a, b) => (parseInt(a.code, 10) || 0) - (parseInt(b.code, 10) || 0)) || [])).catch(() => {})
     api.get('/api/regions').then(r => {
       const provs = r.data?.provinces || []
@@ -97,11 +112,26 @@ export default function ProductSales() {
   }
   function onPickPsCustomer(row, text) {
     const c = customers.find(x => `${x.code} ${x.name}` === text) || customers.find(x => x.code === text) || customers.find(x => x.name === text)
-    updatePs(row.id, { customer: text, customer_id: c ? c.id : '' })
+    const patch = { customer: text, customer_id: c ? c.id : '' }
+    if (c && row.product_id) {
+      const prod = products.find(p => p.id === row.product_id)
+      if (prod) {
+        const cp = customerPriceMap[row.product_id]?.[c.id]
+        patch.sales_price = cp != null ? cp : (prod.default_sales_price ?? '')
+        patch.purchase_price = prod.purchase_price ?? ''
+      }
+    }
+    updatePs(row.id, patch)
   }
   function onPickPsProduct(row, text) {
     const prod = products.find(x => x.name === text)
-    updatePs(row.id, { product: text, product_id: prod ? prod.id : '', sales_price: prod ? prod.default_sales_price : row.sales_price })
+    if (prod) {
+      const cp = customerPriceMap[prod.id]?.[row.customer_id]
+      const sp = cp != null ? cp : (prod.default_sales_price ?? '')
+      updatePs(row.id, { product: text, product_id: prod.id, sales_price: sp, purchase_price: prod.purchase_price ?? '' })
+    } else {
+      updatePs(row.id, { product: text, product_id: '' })
+    }
   }
   function psCalc(p) {
     const qty = Number(p.qty) || 0
@@ -190,9 +220,9 @@ export default function ProductSales() {
       case 'qty':
         return <input type="number" value={p.qty} disabled={!isEditable} onChange={e => updatePs(p.id, { qty: e.target.value })} />
       case 'purchase_price':
-        return <input type="number" step="0.0001" value={p.purchase_price} disabled={!isEditable} onChange={e => updatePs(p.id, { purchase_price: e.target.value })} />
+        return <input type="number" step="0.01" value={p.purchase_price} disabled={!isEditable} onChange={e => updatePs(p.id, { purchase_price: e.target.value })} />
       case 'sales_price':
-        return <input type="number" step="0.0001" value={p.sales_price} disabled={!isEditable} onChange={e => updatePs(p.id, { sales_price: e.target.value })} />
+        return <input type="number" step="0.01" value={p.sales_price} disabled={!isEditable} onChange={e => updatePs(p.id, { sales_price: e.target.value })} />
       case 'sales_amount':
         return <span>¥{calc.sales_amount.toFixed(2)}</span>
       case 'profit':
@@ -227,6 +257,7 @@ export default function ProductSales() {
             {can('product:export') && <button className="btn green" onClick={() => setPsExportModal(true)}>导出 Excel</button>}
             {can('product:export_template') && <button className="btn" onClick={exportPsTemplate}>导出模版</button>}
             {can('product:import') && <button className="btn orange" onClick={() => psFileRef.current.click()}>导入 Excel</button>}
+            {can('products:edit') && <button className="btn" onClick={() => setShowProductManager(true)}>维护产品</button>}
             {isEditable && can('product:create') && <button className="btn primary" onClick={addPsRow}>+ 新增</button>}
             {isEditable && can('product:save') && <button className="btn primary" onClick={saveAll}>批量保存</button>}
             <button className="btn icon" title="自定义表头" onClick={openPicker}>{IconColumns}</button>
@@ -291,6 +322,10 @@ export default function ProductSales() {
             <button className="btn primary" onClick={() => exportPs('all')}>导出全部数据</button>
           </div>
         </Modal>
+      )}
+
+      {showProductManager && (
+        <ProductManager onClose={() => setShowProductManager(false)} onChanged={loadProductsAndPrices} />
       )}
     </div>
   )
