@@ -312,6 +312,16 @@ class DailyData(Base, TimestampMixin):
     group_name = Column(String(100))             # 小组（关联订单）
     source_file = Column(String(500))            # 来源文件名
     source_file_id = Column(Integer)             # 源文件记录 id（用于下载）
+    # ===== 订单信息快照（导入时固化，修改订单不影响历史日活/账单）=====
+    customer_id = Column(Integer)                # 一级代理 id（快照）
+    upstream_id = Column(Integer)                # 甲方 id（快照）
+    channel_id = Column(Integer)                 # 渠道 id（快照）
+    operator_id = Column(Integer)                # 运营商 id（快照）
+    price = Column(Numeric(10, 4))               # 定价（元/条，快照）
+    add_name = Column(Boolean, default=False)    # 是否加名（快照）
+    order_no = Column(String(50))                # 订单编号（快照）
+    tpl_code = Column(String(50))                # 出数模版编号（快照）
+    check_collision = Column(Boolean, default=False)  # 是否撞库（快照）
 
 
 # ============ 业务：洗名库（手机号 → 姓名） ============

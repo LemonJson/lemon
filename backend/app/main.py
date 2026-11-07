@@ -127,6 +127,15 @@ def _migrate_schema():
                 ("name", "VARCHAR(50)"),
                 ("cat1", "VARCHAR(100)"),
                 ("cat2", "VARCHAR(100)"),
+                ("customer_id", "INTEGER"),
+                ("upstream_id", "INTEGER"),
+                ("channel_id", "INTEGER"),
+                ("operator_id", "INTEGER"),
+                ("price", "NUMERIC(10, 4)"),
+                ("add_name", "BOOLEAN"),
+                ("order_no", "VARCHAR(50)"),
+                ("tpl_code", "VARCHAR(50)"),
+                ("check_collision", "BOOLEAN"),
             ]:
                 if col not in daily_cols:
                     conn.execute(text(f"ALTER TABLE daily_data ADD COLUMN {col} {ddl}"))

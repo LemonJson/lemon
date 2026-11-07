@@ -320,6 +320,7 @@ def _order_info_by_task_id(db, task_id):
     cust = db.query(Customer).filter(Customer.id == o.customer_id).first()
     op = db.query(Operator).filter(Operator.id == o.operator_id).first()
     ch = db.query(Channel).filter(Channel.id == o.channel_id).first()
+    tpl = db.query(Template).filter(Template.id == o.tpl_id).first() if o.tpl_id else None
     return {
         "upstream": up.name if up else "",
         "task_name": o.task_name or "",
@@ -329,6 +330,16 @@ def _order_info_by_task_id(db, task_id):
         "channel": ch.name if ch else "",
         "platform": o.platform or "",
         "group_name": o.group_name or "",
+        # 订单信息快照（修改订单不影响历史日活/账单）
+        "customer_id": o.customer_id,
+        "upstream_id": o.upstream_id,
+        "channel_id": o.channel_id,
+        "operator_id": o.operator_id,
+        "price": float(o.price) if o.price is not None else 0,
+        "add_name": bool(o.add_name),
+        "order_no": o.order_no or "",
+        "tpl_code": tpl.code if tpl else "",
+        "check_collision": bool(o.check_collision),
     }
 
 
@@ -349,8 +360,10 @@ def _build_import_ctx(db):
     operators = {op.id: op.name for op in db.query(Operator).all()}
     channels = {ch.id: ch.name for ch in db.query(Channel).all()}
     orders = {o.task_id: o for o in db.query(Order).filter(Order.task_id.isnot(None), Order.deleted_at.is_(None)).all()}
+    templates = {t.id: t.code for t in db.query(Template).all() if t.code}
     return {"wash": wash, "platforms": platforms, "cats": cats,
-            "customers": customers, "operators": operators, "channels": channels, "orders": orders}
+            "customers": customers, "operators": operators, "channels": channels,
+            "orders": orders, "templates": templates}
 
 
 def _ctx_order_info(ctx, task_id):
@@ -370,6 +383,16 @@ def _ctx_order_info(ctx, task_id):
         "channel": ctx["channels"].get(o.channel_id, ""),
         "platform": o.platform or "",
         "group_name": o.group_name or "",
+        # 订单信息快照（修改订单不影响历史日活/账单）
+        "customer_id": o.customer_id,
+        "upstream_id": o.upstream_id,
+        "channel_id": o.channel_id,
+        "operator_id": o.operator_id,
+        "price": float(o.price) if o.price is not None else 0,
+        "add_name": bool(o.add_name),
+        "order_no": o.order_no or "",
+        "tpl_code": ctx["templates"].get(o.tpl_id, "") if o.tpl_id else "",
+        "check_collision": bool(o.check_collision),
     }
 
 
@@ -475,6 +498,15 @@ def _import_niu_excel(db, content, biz_date, source_file, source_file_id, errors
             "secondary_agent": info.get("secondary_agent") or "",
             "channel": info.get("channel") or "",
             "group_name": info.get("group_name") or "",
+            "customer_id": info.get("customer_id"),
+            "upstream_id": info.get("upstream_id"),
+            "channel_id": info.get("channel_id"),
+            "operator_id": info.get("operator_id"),
+            "price": info.get("price"),
+            "add_name": info.get("add_name"),
+            "order_no": info.get("order_no"),
+            "tpl_code": info.get("tpl_code"),
+            "check_collision": info.get("check_collision"),
             "source_file": source_file,
             "source_file_id": source_file_id,
             "created_at": now,
@@ -533,6 +565,15 @@ def _import_new_excel(db, content, biz_date, source_file, source_file_id, errors
             "secondary_agent": info.get("secondary_agent") or "",
             "channel": info.get("channel") or "",
             "group_name": info.get("group_name") or "",
+            "customer_id": info.get("customer_id"),
+            "upstream_id": info.get("upstream_id"),
+            "channel_id": info.get("channel_id"),
+            "operator_id": info.get("operator_id"),
+            "price": info.get("price"),
+            "add_name": info.get("add_name"),
+            "order_no": info.get("order_no"),
+            "tpl_code": info.get("tpl_code"),
+            "check_collision": info.get("check_collision"),
             "source_file": source_file,
             "source_file_id": source_file_id,
             "created_at": now,
@@ -1523,9 +1564,53 @@ def _light_tpl_bytes(tpl_bytes: bytes) -> bytes:
     return bio.getvalue()
 
 
+def _is_product_tpl(tpl_bytes):
+    """判断模版是否产品出数模版（表头同时含「数据代码」和「本次授权/本次申请平台」）"""
+    if not tpl_bytes:
+        return False
+    from openpyxl import load_workbook
+    try:
+        wb = load_workbook(io.BytesIO(tpl_bytes), read_only=True)
+        ws = wb.active
+        rows = ws.iter_rows(min_row=1, max_row=2, values_only=True)
+        headers = next(rows, None) or []
+        if all(h is None or str(h).strip() == "" for h in headers):
+            headers = next(rows, None) or []
+        wb.close()
+    except Exception:
+        return False
+    joined = "".join(re.sub(r"\s+", "", str(h or "")) for h in headers)
+    return ("数据代码" in joined) and ("本次授权" in joined or "本次申请平台" in joined)
+
+
+def _product_tpl_columns(headers):
+    """识别产品出数模版表头，返回 [(列号, 字段, 参数)]，字段：data_code/platform/url/name/status/history"""
+    cols = []
+    for j, h in enumerate(headers, 1):
+        hh = re.sub(r"[\s\u3000]+", "", str(h or "")).lower()
+        if not hh:
+            continue
+        if "近期申请平台" in hh or "近期申请" in hh or "历史平台" in hh:
+            m = re.search(r"([abc123一二三])$", hh)
+            idx = {"a": 0, "b": 1, "c": 2, "1": 0, "2": 1, "3": 2, "一": 0, "二": 1, "三": 2}.get(m.group(1), 0) if m else 0
+            cols.append((j, "history", idx))
+        elif "数据代码" in hh or "数据编码" in hh:
+            cols.append((j, "data_code", None))
+        elif "本次状态" in hh or "申请状态" in hh or hh == "状态":
+            cols.append((j, "status", None))
+        elif "本次授权" in hh or "本次申请平台" in hh or "申请平台" in hh or "平台" in hh:
+            cols.append((j, "platform", None))
+        elif "联系方式" in hh or "手机号" in hh or "号码" in hh:
+            cols.append((j, "url", None))
+        elif "客户名称" in hh or "客户名" in hh or "姓名" in hh or "名字" in hh:
+            cols.append((j, "name", None))
+    return cols
+
+
 def _fill_mb030_file(db, tpl_bytes, records):
-    """MB-030 产品出数模版：数据代码/本次申请平台/联系方式/客户名称/本次状态/近期申请平台A/B/C。
-    数据代码 = LeMon_ + 二级品类编号 + 四位平台编号；数据按数据代码排序；数据单元格绿色背景+边框。"""
+    """产品出数模版（MB-030 及变体）：按模版表头动态识别列
+    （数据代码/本次授权(或本次申请平台)/联系方式/客户名称/本次状态/近期申请平台A/B/C），
+    数据代码 = LM_ + 二级品类编号 + 平台编号；数据按数据代码排序；数据单元格绿色背景+边框。"""
     from openpyxl import load_workbook
     from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
     wb = load_workbook(io.BytesIO(tpl_bytes))
@@ -1546,31 +1631,43 @@ def _fill_mb030_file(db, tpl_bytes, records):
         cat = cat_by_id.get(p.cat_id)
         return (p.code or ""), (cat.code if cat else "")
 
+    header_row = 1
+    headers = [c.value for c in ws[header_row]]
+    if all(h is None or str(h).strip() == "" for h in headers):
+        header_row = 2
+        headers = [c.value for c in ws[header_row]]
+    cols = _product_tpl_columns(headers)
+
     rows = []
     for rec in records:
         pcode, ccode = platform_codes(rec.get("platform") or "")
-        data_code = "LeMon_" + ccode + pcode
+        data_code = "LM_" + ccode + pcode
         hist = [h for h in (rec.get("history") or []) if h and h != "无"]
-        row = [
-            data_code,
-            rec.get("platform") or "",
-            rec.get("url") or "",
-            rec.get("name") or "-",
-            "申请成功",
-            hist[0] if len(hist) > 0 else "-",
-            hist[1] if len(hist) > 1 else "-",
-            hist[2] if len(hist) > 2 else "-",
-        ]
-        rows.append((data_code, row))
+
+        def val(field, idx=None):
+            if field == "data_code":
+                return data_code
+            if field == "platform":
+                return rec.get("platform") or ""
+            if field == "url":
+                return rec.get("url") or ""
+            if field == "name":
+                return rec.get("name") or "-"
+            if field == "status":
+                return "申请成功"
+            if field == "history":
+                return hist[idx] if idx is not None and idx < len(hist) else "-"
+            return ""
+
+        rows.append((data_code, [val(field, idx) for (_j, field, idx) in cols]))
     rows.sort(key=lambda x: x[0])
 
-    header_row = 1
     if ws.max_row > header_row:
         ws.delete_rows(header_row + 1, ws.max_row - header_row)
 
     r = header_row + 1
     for _, row in rows:
-        for j, v in enumerate(row, 1):
+        for (j, _field, _idx), v in zip(cols, row):
             cell = ws.cell(row=r, column=j, value=v)
             cell.fill = green
             cell.border = border
@@ -1587,8 +1684,8 @@ def _fill_mb030_file(db, tpl_bytes, records):
 def _fill_distribute_file(db, tpl_bytes, tpl_code, records):
     """用模版字节 + 日活数据记录（含手机号/省市/运营商/渠道/平台/任务名）生成单个文件；
     若存在「是否撞库」的记录，则在末尾追加「近期申请记录」列（该类记录填历史，无历史填「无」，其余为空）。
-    tpl_code == MB-030 时走产品出数专用填充。"""
-    if tpl_code == "MB-030":
+    产品出数模版（表头含数据代码/近期申请平台）走专用填充，其余走通用填充。"""
+    if _is_product_tpl(tpl_bytes):
         return _fill_mb030_file(db, tpl_bytes, records)
     from openpyxl import load_workbook, Workbook
     from openpyxl.styles import Alignment, Border, Side, Font, PatternFill, NamedStyle
@@ -2011,46 +2108,55 @@ def _build_distribute_zip(db, jobs, date_str, progress_cb, should_cancel=None):
 
 
 def _build_daily_bills(db, date_obj, customer_ids=None):
-    """构建某日期各代理账单明细（不落库）：返回 {cust_code: {customer_id, cust_label, qty, sales, cost, balance, groups, recharge_info}}"""
-    rows = db.query(DailyData.task_id, func.count(DailyData.id)).filter(
-        DailyData.biz_date == date_obj).group_by(DailyData.task_id).all()
-    tids = {tid for tid, _ in rows if tid}
+    """构建某日期各代理账单明细（不落库）：用日活快照字段（修改订单不影响历史账单）；
+    仅「已停/过期」状态判断仍实时关联订单。返回 {cust_code: {customer_id, cust_label, qty, sales, cost, balance, groups, recharge_info}}"""
+    daily_rows = db.query(DailyData).filter(DailyData.biz_date == date_obj).all()
+    grouped = {}
+    for d in daily_rows:
+        if d.task_id:
+            grouped.setdefault(d.task_id, []).append(d)
+    tids = set(grouped.keys())
+    # 仅用于已停/过期状态判断
     orders_by_tid = {o.task_id: o for o in db.query(Order).filter(
         Order.task_id.in_(tids), Order.deleted_at.is_(None)).all()} if tids else {}
-    needed_cids = {o.customer_id for o in orders_by_tid.values()}
-    needed_chids = {o.channel_id for o in orders_by_tid.values() if o.channel_id}
-    needed_oids = {o.operator_id for o in orders_by_tid.values() if o.operator_id}
+    needed_cids = {d.customer_id for d in daily_rows if d.customer_id}
+    needed_chids = {d.channel_id for d in daily_rows if d.channel_id}
+    needed_oids = {d.operator_id for d in daily_rows if d.operator_id}
     cust_map = {c.id: c for c in db.query(Customer).filter(
         Customer.id.in_(needed_cids)).all()} if needed_cids else {}
     ch_map = {c.id: c for c in db.query(Channel).filter(
         Channel.id.in_(needed_chids)).all()} if needed_chids else {}
     op_map = {o.id: o for o in db.query(Operator).filter(
         Operator.id.in_(needed_oids)).all()} if needed_oids else {}
-    # 预加载甲方价格（避免逐订单 N+1 查询）
-    needed_upids = {o.upstream_id for o in orders_by_tid.values() if o.upstream_id}
+    needed_upids = {d.upstream_id for d in daily_rows if d.upstream_id}
     up_price_map = defaultdict(dict)
     for p in db.query(CustomerPrice).filter(CustomerPrice.customer_id.in_(needed_upids)).all():
         up_price_map[p.customer_id][(p.channel_id, p.operator_id)] = float(p.price)
     orders_info = {}
-    for order in orders_by_tid.values():
-        tid = order.task_id
-        cust = cust_map.get(order.customer_id)
-        ch = ch_map.get(order.channel_id)
-        op = op_map.get(order.operator_id)
+    for tid, ds in grouped.items():
+        d = ds[0]
+        cust = cust_map.get(d.customer_id)
+        ch = ch_map.get(d.channel_id)
+        op = op_map.get(d.operator_id)
         up_price = 0.0
-        if order.upstream_id and order.channel_id:
-            pm = up_price_map.get(order.upstream_id, {})
-            up_price = pm.get((order.channel_id, order.operator_id))
+        if d.upstream_id and d.channel_id:
+            pm = up_price_map.get(d.upstream_id, {})
+            up_price = pm.get((d.channel_id, d.operator_id))
             if up_price is None:
-                up_price = pm.get((order.channel_id, None), 0.0)
+                up_price = pm.get((d.channel_id, None), 0.0)
+        order = orders_by_tid.get(tid)
+        cust_code = cust.code if cust else ((d.customer or "").split(" ")[0] if d.customer else "")
+        cust_name = cust.name if cust else ""
         orders_info[tid] = {
-            "group_name": order.group_name or "", "task_name": order.task_name or "",
-            "order_no": order.order_no or "", "channel": ch.name if ch else "",
-            "operator": op.name if op else "", "cust_code": cust.code if cust else "",
-            "cust_name": cust.name if cust else "", "price": float(order.price) if order.price is not None else 0,
-            "customer_id": order.customer_id, "add_name": bool(order.add_name),
-            "upstream_price": up_price, "end_date": order.end_date, "status": order.status,
-            "order_date": order.order_date,
+            "group_name": d.group_name or "", "task_name": d.task_name or "",
+            "order_no": d.order_no or "", "channel": ch.name if ch else (d.channel or ""),
+            "operator": op.name if op else (d.operator or ""), "cust_code": cust_code,
+            "cust_name": cust_name, "price": float(d.price or 0),
+            "customer_id": d.customer_id, "add_name": bool(d.add_name),
+            "upstream_price": up_price,
+            "end_date": order.end_date if order else None,
+            "status": order.status if order else None,
+            "order_date": order.order_date if order else None,
         }
     selected = set(customer_ids) if customer_ids else None
     expired_tids = {tid for tid, info in orders_info.items()
@@ -2058,8 +2164,8 @@ def _build_daily_bills(db, date_obj, customer_ids=None):
                     or (info.get("status") == "已停" and info.get("order_date")
                         and date_obj > info["order_date"] + timedelta(days=1))}
     bills = {}
-    for tid, cnt in rows:
-        cnt = int(cnt or 0)
+    for tid, ds in grouped.items():
+        cnt = len(ds)
         if not tid or tid not in orders_info or tid in expired_tids:
             continue
         info = orders_info[tid]
@@ -2142,6 +2248,14 @@ def _build_daily_bills(db, date_obj, customer_ids=None):
     return bills
 
 
+def _future_recharge(db, customer_id, biz_date):
+    """该客户在 biz_date 之后（未来）日期的充值/补账金额合计（充值正、补账负）。
+    用于从「全局当前余额」中剔除未来日期才生效的充值/补账，得到截止 biz_date 的正确余额快照。"""
+    return db.query(func.coalesce(func.sum(CustomerRecharge.amount_rmb), 0)).filter(
+        CustomerRecharge.customer_id == customer_id,
+        CustomerRecharge.recharge_date > biz_date).scalar() or 0
+
+
 def _regen_downstream_bills(db, date_obj, customer_ids, user_label=""):
     """重新生成指定客户在指定日期的下游账单（分数+产品销售合并），并同步客户余额"""
     ids = list(customer_ids) or []
@@ -2168,6 +2282,9 @@ def _regen_downstream_bills(db, date_obj, customer_ids, user_label=""):
             balance = round(balance + float(existing.sales), 2)
         bill_balance = round(balance - float(b["sales"]), 2)
         b["balance"] = bill_balance
+        # 快照余额：剔除未来日期才生效的充值/补账，得到截止当日的正确余额快照
+        future_recharge = float(_future_recharge(db, cid, date_obj) or 0)
+        snap_balance = round(bill_balance - future_recharge, 2)
         profit = round(float(b["sales"]) - float(b["cost"]), 2)
         detail_json = json.dumps({"groups": b.get("groups", {}),
                                   "recharge_info": b.get("recharge_info", [])},
@@ -2175,14 +2292,14 @@ def _regen_downstream_bills(db, date_obj, customer_ids, user_label=""):
         if existing:
             existing.purchase_qty = b["qty"]
             existing.sales = b["sales"]
-            existing.balance = bill_balance
+            existing.balance = snap_balance
             existing.profit = profit
             existing.detail_json = detail_json
             if user_label:
                 existing.updated_by = user_label
         else:
             db.add(Bill(customer_id=cid, biz_date=date_obj, purchase_qty=b["qty"],
-                        sales=b["sales"], balance=bill_balance, profit=profit,
+                        sales=b["sales"], balance=snap_balance, profit=profit,
                         detail_json=detail_json,
                         created_by=user_label, updated_by=user_label))
         if cust is not None:
@@ -2214,55 +2331,64 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
     if not rows:
         raise HTTPException(status_code=404, detail=f"数据日期 {body.date} 没有可分发的数据")
 
-    # 预加载参考数据，消除逐工单 N+1 查询
+    # 预加载参考数据（快照 id 关联），订单仅用于已停/过期状态判断
     task_ids = {d.task_id for d in rows if d.task_id}
     orders_by_tid = {o.task_id: o for o in db.query(Order).filter(Order.task_id.in_(task_ids), Order.deleted_at.is_(None)).all()}
-    customers = {c.id: c for c in db.query(Customer).all()}
-    channels = {c.id: c for c in db.query(Channel).all()}
-    operators = {o.id: o for o in db.query(Operator).all()}
-    templates = {t.id: t for t in db.query(Template).all()}
+    needed_cids = {d.customer_id for d in rows if d.customer_id}
+    needed_chids = {d.channel_id for d in rows if d.channel_id}
+    needed_oids = {d.operator_id for d in rows if d.operator_id}
+    customers = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(needed_cids)).all()}
+    channels = {c.id: c for c in db.query(Channel).filter(Channel.id.in_(needed_chids)).all()}
+    operators = {o.id: o for o in db.query(Operator).filter(Operator.id.in_(needed_oids)).all()}
+    needed_tpls = {d.tpl_code for d in rows if d.tpl_code}
+    tpl_by_code = {t.code: t for t in db.query(Template).filter(Template.code.in_(needed_tpls)).all()}
+    needed_upids = {d.upstream_id for d in rows if d.upstream_id}
     prices = {}
-    for p in db.query(CustomerPrice).all():
+    for p in db.query(CustomerPrice).filter(CustomerPrice.customer_id.in_(needed_upids)).all():
         prices[(p.customer_id, p.channel_id, p.operator_id)] = float(p.price)
 
-    # 1. 先把分数据对象（日活数据）全部与订单数据关联（按任务id）
+    # 1. 按 task_id 聚合日活（同一 task_id 快照一致），用快照字段构建分数据对象
+    grouped = {}
+    for d in rows:
+        if d.task_id:
+            grouped.setdefault(d.task_id, []).append(d)
     orders_info = {}
-    for tid in task_ids:
-        order = orders_by_tid.get(tid)
-        if not order:
-            continue
-        cust = customers.get(order.customer_id)
-        tpl = templates.get(order.tpl_id) if order.tpl_id else None
-        ch = channels.get(order.channel_id)
-        op = operators.get(order.operator_id)
-        # 上游单价（成本）：客户管理里「上游」客户按渠道（dpi 渠道再按运营商）设定的单价
+    for tid, ds in grouped.items():
+        d = ds[0]
+        if not d.customer_id:
+            continue  # 导入时未关联到订单（无快照）
+        order = orders_by_tid.get(tid)  # 仅用于状态判断
+        cust = customers.get(d.customer_id)
+        ch = channels.get(d.channel_id)
+        op = operators.get(d.operator_id)
+        tpl = tpl_by_code.get(d.tpl_code) if d.tpl_code else None
+        # 上游单价（成本）：按快照 上游/渠道/运营商 设定单价
         up_price = 0.0
-        if order.upstream_id and order.channel_id:
-            v = prices.get((order.upstream_id, order.channel_id, order.operator_id))
+        if d.upstream_id and d.channel_id:
+            v = prices.get((d.upstream_id, d.channel_id, d.operator_id))
             if v is None:
-                v = prices.get((order.upstream_id, order.channel_id, None))
+                v = prices.get((d.upstream_id, d.channel_id, None))
             up_price = v or 0.0
+        cust_code = cust.code if cust else ((d.customer or "").split(" ")[0] if d.customer else "")
         orders_info[tid] = {
-            "tpl_code": tpl.code if tpl else "",
-            "group_name": order.group_name or "",
-            "task_name": order.task_name or "",
-            "order_no": order.order_no or "",
-            "stop_date": order.stop_date,
-            "end_date": order.end_date,
-            "order_date": order.order_date,
-            "status": order.status,
-            "city": order.city or "",
-            "province": order.province or "",
-            "channel": ch.name if ch else "",
-            "operator": op.name if op else "",
-            "cust_code": cust.code if cust else "",
+            "tpl_code": d.tpl_code or "",
+            "group_name": d.group_name or "",
+            "task_name": d.task_name or "",
+            "order_no": d.order_no or "",
+            "stop_date": order.stop_date if order else None,
+            "end_date": order.end_date if order else None,
+            "order_date": order.order_date if order else None,
+            "status": order.status if order else None,
+            "channel": ch.name if ch else (d.channel or ""),
+            "operator": op.name if op else (d.operator or ""),
+            "cust_code": cust_code,
             "cust_name": cust.name if cust else "",
-            "sec_agent": order.secondary_agent or "",
+            "sec_agent": d.secondary_agent or "",
             "tpl_bytes": bytes(tpl.file_data) if tpl and tpl.file_data else None,
-            "price": float(order.price) if order.price is not None else 0,
-            "customer_id": order.customer_id,
-            "add_name": bool(order.add_name),
-            "check_collision": bool(order.check_collision),
+            "price": float(d.price or 0),
+            "customer_id": d.customer_id,
+            "add_name": bool(d.add_name),
+            "check_collision": bool(d.check_collision),
             "upstream_price": up_price,
         }
 
@@ -2470,6 +2596,8 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
                         balance = round(balance + float(existing.sales), 2)
                     bill_balance = round(balance - float(b["sales"]), 2)
                     b["balance"] = bill_balance
+                    # 快照余额：剔除未来日期才生效的充值/补账，得到截止当日的正确余额快照
+                    snap_balance = round(bill_balance - float(_future_recharge(db2, cid, date_obj) or 0), 2)
                     profit = round(float(b["sales"]) - float(b["cost"]), 2)
                     detail_json = json.dumps({"groups": b.get("groups", {}),
                                               "recharge_info": b.get("recharge_info", [])},
@@ -2477,13 +2605,13 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
                     if existing:
                         existing.purchase_qty = b["qty"]
                         existing.sales = b["sales"]
-                        existing.balance = bill_balance
+                        existing.balance = snap_balance
                         existing.profit = profit
                         existing.detail_json = detail_json
                         existing.updated_by = user_label
                     else:
                         db2.add(Bill(customer_id=cid, biz_date=date_obj, purchase_qty=b["qty"],
-                                     sales=b["sales"], balance=bill_balance, profit=profit,
+                                     sales=b["sales"], balance=snap_balance, profit=profit,
                                      detail_json=detail_json,
                                      created_by=user_label, updated_by=user_label))
                     if cust is not None:
@@ -2498,19 +2626,20 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
                     if existing and existing.sales is not None:
                         balance = round(balance + float(existing.sales), 2)
                     bill_balance = round(balance - float(item["sales"]), 2)
+                    snap_balance = round(bill_balance - float(_future_recharge(db2, up_id, date_obj) or 0), 2)
                     up_detail = json.dumps({"groups": item["groups"],
                                             "recharge_info": item["recharge_info"]},
                                            ensure_ascii=False)
                     if existing:
                         existing.purchase_qty = item["qty"]
                         existing.sales = item["sales"]
-                        existing.balance = bill_balance
+                        existing.balance = snap_balance
                         existing.profit = round(float(item["sales"]), 2)
                         existing.detail_json = up_detail
                         existing.updated_by = user_label
                     else:
                         db2.add(Bill(customer_id=up_id, biz_date=date_obj, purchase_qty=item["qty"],
-                                     sales=item["sales"], balance=bill_balance,
+                                     sales=item["sales"], balance=snap_balance,
                                      profit=round(float(item["sales"]), 2),
                                      detail_json=up_detail,
                                      created_by=user_label, updated_by=user_label))
@@ -3898,9 +4027,17 @@ def _fill_mb031_bill(db, cust, summary_start, summary_end, detail_days, tpl_byte
     data_font1 = copy(ws1.cell(row=2, column=1).font)
     data_font2 = copy(tpl_ws.cell(row=8, column=1).font)
 
-    # 期初余额：汇总起始日前的最后一张账单余额，取不到默认 0
-    prev = db.query(Bill).filter(Bill.customer_id == cust.id, Bill.biz_date < summary_start, Bill.deleted_at.is_(None)).order_by(Bill.biz_date.desc()).first()
-    opening = round(float(prev.balance), 2) if prev and prev.balance is not None else 0.0
+    # 期初余额：从当前余额反推（与递推同口径，不依赖历史快照，自动覆盖补录/未来日期的充值补账）。
+    # cust.balance = 期初 + Σ充值/补账金额 - Σ销售金额（分数据快照），故：
+    # opening = cust.balance + Σ销售[biz_date>=S] - Σ充值/补账金额[recharge_date>=S]。
+    opening = float(cust.balance or 0)
+    total_sales_after = db.query(func.coalesce(func.sum(Bill.sales), 0)).filter(
+        Bill.customer_id == cust.id, Bill.biz_date >= summary_start,
+        Bill.deleted_at.is_(None)).scalar() or 0
+    total_recharge_after = db.query(func.coalesce(func.sum(CustomerRecharge.amount_rmb), 0)).filter(
+        CustomerRecharge.customer_id == cust.id,
+        CustomerRecharge.recharge_date >= summary_start).scalar() or 0
+    opening = round(opening + float(total_sales_after) - float(total_recharge_after), 2)
 
     # 汇总期间账单 / 充值补数
     bills = {b.biz_date: b for b in db.query(Bill).filter(
