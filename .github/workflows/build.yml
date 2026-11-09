@@ -48,9 +48,6 @@ jobs:
           cp backend/requirements.txt "$PKG/requirements.txt"
           cp run.bat "$PKG/run.bat"
           cp backend/.env.example "$PKG/.env"
-          cp backend/migrate_sqlite_to_pg.py "$PKG/migrate_sqlite_to_pg.py"
-          cp deploy_postgres.bat "$PKG/deploy_postgres.bat"
-          cp run_pg.bat "$PKG/run_pg.bat"
           touch "$PKG/logs/app.log"
           cd dist-package
           zip -r -q ../LM-order-system-win.zip LM-order-system
