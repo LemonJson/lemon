@@ -474,17 +474,24 @@ def _is_header_row(values):
     return any(k in joined for k in ("任务id", "任务名", "手机号", "运营商", "省", "市"))
 
 
-def _import_niu_excel(db, content, biz_date, source_file, source_file_id, errors, seen, ctx=None):
+def _read_excel_rows(content):
+    """用 calamine（Rust）快速读取 Excel 全部行，返回 list[list]（空单元格为 ''）"""
+    from python_calamine import CalamineWorkbook
+    wb = CalamineWorkbook.from_filelike(io.BytesIO(content))
+    sheet = wb.get_sheet_by_index(0)
+    return sheet.to_python()
+
+
+def _import_niu_excel(db, content, biz_date, source_file, source_file_id, errors, seen, ctx=None, rows=None):
     """解析牛的数据 excel（第一行是表头）：任务id/任务名/手机号/省/市/运营商"""
-    import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    ws = wb.active
+    if rows is None:
+        rows = _read_excel_rows(content)
     n = 0
     deduped = 0
     header = None
     batch = []
     now = datetime.now()
-    for values in ws.iter_rows(values_only=True):
+    for values in rows:
         if header is None:
             header = [str(v).strip() if v is not None else "" for v in values]
             continue
@@ -559,20 +566,18 @@ def _import_niu_excel(db, content, biz_date, source_file, source_file_id, errors
             batch = []
     if batch:
         db.execute(insert(DailyData), batch)
-    wb.close()
     return n, deduped
 
 
-def _import_new_excel(db, content, biz_date, source_file, source_file_id, errors, seen, ctx=None):
+def _import_new_excel(db, content, biz_date, source_file, source_file_id, errors, seen, ctx=None, rows=None):
     """解析新的数据 excel（第一行是数据，无表头）：手机号/甲方工单号/平台/省/市"""
-    import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    ws = wb.active
+    if rows is None:
+        rows = _read_excel_rows(content)
     n = 0
     deduped = 0
     batch = []
     now = datetime.now()
-    for values in ws.iter_rows(values_only=True):
+    for values in rows:
         if not any((str(v) if v is not None else "").strip() for v in values):
             continue
         vals = [str(v).strip() if v is not None else "" for v in values]
@@ -630,7 +635,6 @@ def _import_new_excel(db, content, biz_date, source_file, source_file_id, errors
             batch = []
     if batch:
         db.execute(insert(DailyData), batch)
-    wb.close()
     return n, deduped
 
 
@@ -658,18 +662,12 @@ def _import_one_daily_file(db, fn, content, date_obj, source_file_id, errors, se
         except Exception as e:  # noqa
             errors.append(f"{fn}: 解压失败 {e}")
     else:
-        import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        ws = wb.active
-        first = None
-        for values in ws.iter_rows(values_only=True):
-            first = values
-            break
-        wb.close()
+        rows = _read_excel_rows(content)
+        first = rows[0] if rows else None
         if _is_header_row(first):
-            nn, dd = _import_niu_excel(db, content, date_obj, fn, source_file_id, errors, seen, ctx)
+            nn, dd = _import_niu_excel(db, content, date_obj, fn, source_file_id, errors, seen, ctx, rows=rows)
         else:
-            nn, dd = _import_new_excel(db, content, date_obj, fn, source_file_id, errors, seen, ctx)
+            nn, dd = _import_new_excel(db, content, date_obj, fn, source_file_id, errors, seen, ctx, rows=rows)
         n += nn
         deduped += dd
     return n, deduped
@@ -677,9 +675,7 @@ def _import_one_daily_file(db, fn, content, date_obj, source_file_id, errors, se
 
 def _extract_task_ids_from_excel(content):
     """解析 excel，返回所有（有手机号行的）任务id列表（可能含空串）"""
-    import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    ws = wb.active
+    rows = _read_excel_rows(content)
     tids = []
     header = None
     header_mode = False
@@ -693,7 +689,7 @@ def _extract_task_ids_from_excel(content):
                     return i
         return -1
 
-    for values in ws.iter_rows(values_only=True):
+    for values in rows:
         if header is None:
             header = [str(v).strip() if v is not None else "" for v in values]
             if _is_header_row(values):
@@ -712,7 +708,6 @@ def _extract_task_ids_from_excel(content):
             tid = vals[1] if len(vals) > 1 else ""
         if phone:
             tids.append(tid)
-    wb.close()
     return tids
 
 
@@ -731,45 +726,40 @@ def _extract_task_ids(fn, content):
     return tids
 
 
-def _count_unmatched(db, file_list):
-    """统计未匹配到订单的日活数据条数，返回 (条数, 未匹配工单明细列表)"""
+def _count_import_issues(db, file_list, date_obj):
+    """一次解析所有文件，同时统计「未匹配订单」与「已停订单异常」两类问题，避免重复解析 Excel。
+    返回 (unmatched_total, unmatched_items, stopped_total, stopped_items)"""
     order_tids = {r[0] for r in db.query(Order.task_id).filter(Order.deleted_at.is_(None)).all() if r[0]}
-    total = 0
-    cnt = defaultdict(int)
+    stopped = {o.task_id: o for o in db.query(Order).filter(Order.status == "已停", Order.deleted_at.is_(None)).all() if o.task_id}
+    chans = {c.id: c.name for c in db.query(Channel).all()}
+    unmatched_total = 0
+    unmatched_cnt = defaultdict(int)
+    stopped_total = 0
+    stopped_tids = set()
+    stopped_cnt = defaultdict(int)
     for fn, content in file_list:
         for tid in _extract_task_ids(fn, content):
             if tid not in order_tids:
-                total += 1
+                unmatched_total += 1
                 if tid:
-                    cnt[tid] += 1
-    items = [{"task_id": tid, "task_name": "", "channel": "", "reason": "未匹配到订单（系统中无此工单号）",
-              "qty": cnt[tid]} for tid in sorted(cnt)]
-    return total, items
-
-
-def _count_stopped_abnormal(db, file_list, date_obj):
-    """统计关联到已停订单、且数据日期已过截止日期 T+1（末次出数日期 end_date+1）仍在出数的异常数据"""
-    stopped = {o.task_id: o for o in db.query(Order).filter(Order.status == "已停", Order.deleted_at.is_(None)).all() if o.task_id}
-    chans = {c.id: c.name for c in db.query(Channel).all()}
-    total = 0
-    tids = set()
-    cnt = defaultdict(int)
-    for fn, content in file_list:
-        for tid in _extract_task_ids(fn, content):
-            o = stopped.get(tid)
-            if o and o.end_date and date_obj > o.end_date + timedelta(days=1):
-                total += 1
-                tids.add(tid)
-                cnt[tid] += 1
-    items = []
-    for tid in sorted(tids):
+                    unmatched_cnt[tid] += 1
+            else:
+                o = stopped.get(tid)
+                if o and o.end_date and date_obj > o.end_date + timedelta(days=1):
+                    stopped_total += 1
+                    stopped_tids.add(tid)
+                    stopped_cnt[tid] += 1
+    unmatched_items = [{"task_id": tid, "task_name": "", "channel": "", "reason": "未匹配到订单（系统中无此工单号）",
+                        "qty": unmatched_cnt[tid]} for tid in sorted(unmatched_cnt)]
+    stopped_items = []
+    for tid in sorted(stopped_tids):
         o = stopped.get(tid)
         end_str = fmt_date(o.end_date) if (o and o.end_date) else ""
-        items.append({"task_id": tid, "task_name": (o.task_name or "") if o else "",
-                      "channel": chans.get(o.channel_id, "") if o else "",
-                      "reason": f"已停订单，数据日期已过末次出数日（截止日期 {end_str}）" if end_str else "已停订单，数据日期已过末次出数日",
-                      "qty": cnt[tid]})
-    return total, items
+        stopped_items.append({"task_id": tid, "task_name": (o.task_name or "") if o else "",
+                              "channel": chans.get(o.channel_id, "") if o else "",
+                              "reason": f"已停订单，数据日期已过末次出数日（截止日期 {end_str}）" if end_str else "已停订单，数据日期已过末次出数日",
+                              "qty": stopped_cnt[tid]})
+    return unmatched_total, unmatched_items, stopped_total, stopped_items
 
 
 def _count_inactive_orders(db, date_obj):
@@ -801,10 +791,9 @@ async def import_daily(files: List[UploadFile] = File(...), biz_date: str = Form
         if content:
             file_list.append((fn, content))
 
-    # 未匹配订单 或 已停订单异常数据时，弹出提示确认
+    # 未匹配订单 或 已停订单异常数据时，弹出提示确认（一次解析同时统计两类）
     if not confirm:
-        unmatched, unmatched_items = _count_unmatched(db, file_list)
-        stopped_abnormal, stopped_items = _count_stopped_abnormal(db, file_list, date_obj)
+        unmatched, unmatched_items, stopped_abnormal, stopped_items = _count_import_issues(db, file_list, date_obj)
         if unmatched > 0 or stopped_abnormal > 0:
             return {"code": 0, "data": {"needs_confirm": True, "unmatched": unmatched, "unmatched_items": unmatched_items,
                                         "stopped_abnormal": stopped_abnormal, "stopped_items": stopped_items},
