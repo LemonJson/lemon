@@ -232,7 +232,7 @@ def _migrate_schema():
                 if engine.dialect.name == "postgresql":
                     conn.execute(text("ALTER TABLE bill ALTER COLUMN customer_id DROP NOT NULL"))
                 else:
-                    # SQLite：重建 bill 表使 customer_id 可空
+                    # SQLite：重建 bill 表使 customer_id 可空，并补全字段（detail_json/操作人/软删除等）
                     conn.execute(text("""
                         CREATE TABLE IF NOT EXISTS bill_new (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -244,14 +244,21 @@ def _migrate_schema():
                             profit NUMERIC(14,2) DEFAULT 0,
                             bill_type VARCHAR(20) DEFAULT '分数据',
                             target_name VARCHAR(200),
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                            detail_json TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            created_by VARCHAR(50),
+                            updated_at TIMESTAMP,
+                            updated_by VARCHAR(50),
+                            deleted_at TIMESTAMP
                         )
                     """))
-                    conn.execute(text("""
-                        INSERT INTO bill_new (id, customer_id, biz_date, purchase_qty, sales, balance, profit, bill_type, target_name, created_at)
-                        SELECT id, customer_id, biz_date, purchase_qty, sales, balance, profit,
-                               COALESCE(bill_type, '分数据'), target_name, created_at FROM bill
-                    """))
+                    bill_cols = {c["name"] for c in insp.get_columns("bill")}
+                    src_cols = [c for c in ["id", "customer_id", "biz_date", "purchase_qty", "sales",
+                                            "balance", "profit", "bill_type", "target_name", "detail_json",
+                                            "created_at", "created_by", "updated_at", "updated_by", "deleted_at"]
+                                if c in bill_cols]
+                    col_list = ", ".join(src_cols)
+                    conn.execute(text(f"INSERT INTO bill_new ({col_list}) SELECT {col_list} FROM bill"))
                     conn.execute(text("DROP TABLE bill"))
                     conn.execute(text("ALTER TABLE bill_new RENAME TO bill"))
             # 去掉过严的唯一索引：同一任务可有多条不同 URL 的订单，重复判定交给「验重」逻辑（url+地区+运营商）
