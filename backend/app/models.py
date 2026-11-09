@@ -211,6 +211,14 @@ class Order(Base, TimestampMixin, SoftDeleteMixin):
     check_collision = Column(Boolean, default=False)  # 是否撞库 是/否
     created_by = Column(String(50))               # 创建人
     updated_by = Column(String(50))               # 更新人
+    # ===== 子表名称快照（订单创建/更新时固化，子表改名不影响历史订单展示）=====
+    customer_name = Column(String(100))           # 一级代理名快照（code name）
+    upstream_name = Column(String(100))           # 甲方名快照
+    channel_name = Column(String(100))            # 渠道名快照
+    operator_name = Column(String(50))            # 运营商名快照
+    tpl_code = Column(String(50))                 # 出数模版编号快照
+    tpl_name = Column(String(100))                # 出数模版名称快照
+    template_name = Column(String(100))           # 下发模版名称快照
     urls = relationship("OrderUrl", cascade="all, delete-orphan", backref="order")
 
 
@@ -322,6 +330,10 @@ class DailyData(Base, TimestampMixin):
     order_no = Column(String(50))                # 订单编号（快照）
     tpl_code = Column(String(50))                # 出数模版编号（快照）
     check_collision = Column(Boolean, default=False)  # 是否撞库（快照）
+    status = Column(String(20))                  # 订单状态（快照：导入时固化，停单/复提不影响历史）
+    order_date = Column(Date)                    # 订单更新日期（快照）
+    end_date = Column(Date)                      # 订单截止日期（快照）
+    upstream_price = Column(Numeric(10, 4))      # 上游成本价（元/条，快照：按 上游/渠道/运营商 定价）
 
 
 # ============ 业务：洗名库（手机号 → 姓名） ============

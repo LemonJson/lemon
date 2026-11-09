@@ -58,19 +58,6 @@ def _bill_balance_at(db, d):
     return round(float(up) - down_at_d, 2)
 
 
-def snapshot_daily_bill(db, d=None):
-    """为指定日期（默认今天）写入/更新当日账单余额快照，返回快照值"""
-    d = d or date.today()
-    bal = _net_bill_balance(db)
-    rec = db.query(DailyBill).filter(DailyBill.biz_date == d).first()
-    if rec:
-        rec.bill_balance = bal
-    else:
-        db.add(DailyBill(biz_date=d, bill_balance=bal))
-    db.commit()
-    return bal
-
-
 def snapshot_agent_orders(db, d=None):
     """为指定日期（默认今天）生成每个客户（上游+下游）的在执订单数快照，返回客户数"""
     from ..models import AgentOrderSnapshot
@@ -93,19 +80,10 @@ def snapshot_agent_orders(db, d=None):
 
 
 def _daily_bill_balance(db, d):
-    """某日账单余额：今天实时计算，历史优先取快照，无快照则重建并回填"""
+    """某日账单余额：今天实时计算，历史动态重建（随客户余额变化，不锁死快照）"""
     if d == date.today():
         return _net_bill_balance(db)
-    rec = db.query(DailyBill).filter(DailyBill.biz_date == d).first()
-    if rec and rec.bill_balance is not None:
-        return float(rec.bill_balance)
-    bal = _bill_balance_at(db, d)
-    if rec:
-        rec.bill_balance = bal
-    else:
-        db.add(DailyBill(biz_date=d, bill_balance=bal))
-    db.commit()
-    return bal
+    return _bill_balance_at(db, d)
 
 
 @router.get("/summary")
@@ -293,9 +271,6 @@ def daily_bills(db: Session = Depends(get_db), _=Depends(get_current_user),
     start_d = datetime.strptime(start, "%Y-%m-%d").date() if start else (end_d - timedelta(days=29))
     if start_d > end_d:
         start_d, end_d = end_d, start_d
-    today = date.today()
-    if start_d <= today <= end_d:
-        snapshot_daily_bill(db, today)
     rate = _get_usdt_rate(db)
     data = []
     d = end_d

@@ -103,6 +103,13 @@ def _migrate_schema():
                 ("updated_by", "VARCHAR(50)"),
                 ("stop_prev_order_date", "DATE"),
                 ("stop_prev_end_date", "DATE"),
+                ("customer_name", "VARCHAR(100)"),
+                ("upstream_name", "VARCHAR(100)"),
+                ("channel_name", "VARCHAR(100)"),
+                ("operator_name", "VARCHAR(50)"),
+                ("tpl_code", "VARCHAR(50)"),
+                ("tpl_name", "VARCHAR(100)"),
+                ("template_name", "VARCHAR(100)"),
             ]:
                 if col not in order_cols:
                     conn.execute(text(f"ALTER TABLE orders ADD COLUMN {col} {ddl}"))
@@ -136,6 +143,10 @@ def _migrate_schema():
                 ("order_no", "VARCHAR(50)"),
                 ("tpl_code", "VARCHAR(50)"),
                 ("check_collision", "BOOLEAN"),
+                ("status", "VARCHAR(20)"),
+                ("order_date", "DATE"),
+                ("end_date", "DATE"),
+                ("upstream_price", "NUMERIC(10, 4)"),
             ]:
                 if col not in daily_cols:
                     conn.execute(text(f"ALTER TABLE daily_data ADD COLUMN {col} {ddl}"))
@@ -585,25 +596,6 @@ def _scheduler_loop():
         time.sleep(60)  # 防止重复触发
 
 
-def _daily_bill_loop():
-    """每天 23:50 快照当日账单余额（=-(代理余额合计-甲方余额)）写入每日账单"""
-    from .routers.dashboard import snapshot_daily_bill
-    while True:
-        now = datetime.now()
-        next_run = now.replace(hour=23, minute=50, second=0, microsecond=0)
-        if next_run <= now:
-            next_run += timedelta(days=1)
-        time.sleep((next_run - now).total_seconds())
-        try:
-            db = SessionLocal()
-            bal = snapshot_daily_bill(db)
-            db.close()
-            print(f"[daily-bill] 每日账单快照完成：账单余额={bal}")
-        except Exception as e:  # noqa
-            print(f"[daily-bill] 快照异常: {e}")
-        time.sleep(60)  # 防止重复触发
-
-
 def _agent_order_snapshot_loop():
     """每天 23:55 快照各代理在执订单数"""
     from .routers.dashboard import snapshot_agent_orders
@@ -816,7 +808,6 @@ def on_startup():
         db.close()
     threading.Thread(target=_scheduler_loop, daemon=True).start()
     threading.Thread(target=_backup_loop, daemon=True).start()
-    threading.Thread(target=_daily_bill_loop, daemon=True).start()
     threading.Thread(target=_agent_order_snapshot_loop, daemon=True).start()
     threading.Thread(target=_trash_cleanup_loop, daemon=True).start()
 

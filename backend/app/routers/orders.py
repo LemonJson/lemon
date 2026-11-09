@@ -120,6 +120,23 @@ def _operator_name(db, o: Order) -> str:
     return ""
 
 
+def _snap_order_names(db, o: Order):
+    """固化订单关联子表的名称快照（子表改名不影响历史订单展示）"""
+    cust = db.query(Customer).filter(Customer.id == o.customer_id).first() if o.customer_id else None
+    up = db.query(Customer).filter(Customer.id == o.upstream_id).first() if o.upstream_id else None
+    ch = db.query(Channel).filter(Channel.id == o.channel_id).first() if o.channel_id else None
+    op = db.query(Operator).filter(Operator.id == o.operator_id).first() if o.operator_id else None
+    tpl = db.query(Template).filter(Template.id == o.tpl_id).first() if o.tpl_id else None
+    ot = db.query(OrderTemplate).filter(OrderTemplate.id == o.template_id).first() if o.template_id else None
+    o.customer_name = f"{cust.code} {cust.name}".strip() if cust else ""
+    o.upstream_name = up.name if up else ""
+    o.channel_name = ch.name if ch else ""
+    o.operator_name = op.name if op else ""
+    o.tpl_code = tpl.code if tpl else ""
+    o.tpl_name = tpl.name if tpl else ""
+    o.template_name = ot.name if ot else ""
+
+
 def _user_label(user) -> str:
     return (user.nickname or user.username) if user else ""
 
@@ -137,7 +154,7 @@ def _order_dict(db, o: Order, alert_order_ids=None, cache=None) -> dict:
     up = customers.get(o.upstream_id)
     tpl = templates.get(o.tpl_id) if o.tpl_id else None
     op = operators.get(o.operator_id)
-    operator = op.name if op else ""
+    operator = o.operator_name or (op.name if op else "")
     order_urls = urls_map.get(o.id, [])
     urls = [u.url for u in order_urls]
     url_items = [{"url": u.url} for u in order_urls]
@@ -162,17 +179,17 @@ def _order_dict(db, o: Order, alert_order_ids=None, cache=None) -> dict:
         "start_date": fmt_date(o.start_date) if o.start_date else None,
         "end_date": fmt_date(o.end_date) if o.end_date else None,
         "updated_at": fmt_dt(o.updated_at),
-        "upstream": up.name if up else "", "upstream_id": o.upstream_id,
-        "customer": f"{c.code} {c.name}" if c else "", "customer_id": o.customer_id,
-        "channel": ch.name if ch else "", "channel_id": o.channel_id, "task_name": o.task_name,
+        "upstream": o.upstream_name or (up.name if up else ""), "upstream_id": o.upstream_id,
+        "customer": o.customer_name or (f"{c.code} {c.name}" if c else ""), "customer_id": o.customer_id,
+        "channel": o.channel_name or (ch.name if ch else ""), "channel_id": o.channel_id, "task_name": o.task_name,
         "task_id": o.task_id or "", "client_order_no": o.task_id or "", "duration": _duration_days(o.start_date, o.end_date) or o.duration or "",
         "operator": operator, "operator_id": o.operator_id,
         "price": float(o.price) if o.price is not None else None,
         "secondary_agent": o.secondary_agent or "",
         "platform": o.platform or "",
         "template_id": o.template_id, "filename_rule": o.filename_rule or "",
-        "template_name": (order_templates.get(o.template_id).name if (o.template_id and order_templates.get(o.template_id)) else ""),
-        "tpl_id": o.tpl_id, "tpl_code": tpl.code if tpl else "", "tpl_name": tpl.name if tpl else "",
+        "template_name": (o.template_name or (order_templates.get(o.template_id).name if (o.template_id and order_templates.get(o.template_id)) else "")),
+        "tpl_id": o.tpl_id, "tpl_code": o.tpl_code or (tpl.code if tpl else ""), "tpl_name": o.tpl_name or (tpl.name if tpl else ""),
         "group_name": o.group_name or "",
         "export_filename": o.export_filename or "",
         "add_name": bool(o.add_name),
@@ -632,6 +649,7 @@ def create_order(body: OrderBody, db: Session = Depends(get_db), user=Depends(ge
     o.template_id = body.template_id if body.template_id is not None else match_template(db, o)
     o.created_by = _user_label(user)
     o.updated_by = _user_label(user)
+    _snap_order_names(db, o)
     db.add(o)
     db.flush()
     url_list = []
@@ -711,6 +729,7 @@ def update_order(oid: int, body: OrderBody, db: Session = Depends(get_db), user=
         setattr(o, k, getattr(body, k))
     o.dist_config_json = json.dumps(body.dist_config, ensure_ascii=False) if body.dist_config else None
     o.template_id = body.template_id if body.template_id is not None else match_template(db, o)
+    _snap_order_names(db, o)
     o.status = new_status
     # 改单：记录变更字段（与原改单处理一致）；非改单状态清空
     o.change_fields_json = json.dumps(changed_fields, ensure_ascii=False) if (new_status == "改单" and changed_fields) else None
