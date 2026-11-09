@@ -22,6 +22,14 @@ def _get_usdt_rate(db):
         return 7.0
 
 
+def _latest_biz_date(db):
+    """最新营业日：账单日期与充值日期的较大值（无数据时回退系统日期）"""
+    bill_d = db.query(func.max(Bill.biz_date)).filter(Bill.deleted_at.is_(None)).scalar()
+    rc_d = db.query(func.max(CustomerRecharge.recharge_date)).scalar()
+    d = max((x for x in (bill_d, rc_d) if x), default=None)
+    return d if d else date.today()
+
+
 def _net_bill_balance(db):
     """账单余额 = -(代理余额合计 - 甲方余额) = 甲方余额 - 代理余额合计"""
     down = db.query(func.coalesce(func.sum(Customer.balance), 0)).filter(Customer.ctype == "downstream", Customer.deleted_at.is_(None)).scalar() or 0
@@ -61,7 +69,7 @@ def _bill_balance_at(db, d):
 def snapshot_agent_orders(db, d=None):
     """为指定日期（默认今天）生成每个客户（上游+下游）的在执订单数快照，返回客户数"""
     from ..models import AgentOrderSnapshot
-    d = d or date.today()
+    d = d or _latest_biz_date(db)
     active_down = dict(db.query(Order.customer_id, func.count(Order.id)).filter(
         Order.status == "在执", Order.deleted_at.is_(None)).group_by(Order.customer_id).all())
     active_up = dict(db.query(Order.upstream_id, func.count(Order.id)).filter(
@@ -81,7 +89,7 @@ def snapshot_agent_orders(db, d=None):
 
 def _daily_bill_balance(db, d):
     """某日账单余额：今天实时计算，历史动态重建（随客户余额变化，不锁死快照）"""
-    if d == date.today():
+    if d == _latest_biz_date(db):
         return _net_bill_balance(db)
     return _bill_balance_at(db, d)
 
@@ -94,11 +102,12 @@ def summary(db: Session = Depends(get_db), _=Depends(get_current_user)):
     down_balance = db.query(func.coalesce(func.sum(Customer.balance), 0)).filter(Customer.ctype == "downstream", Customer.deleted_at.is_(None)).scalar() or 0
     up_balance = db.query(func.coalesce(func.sum(Customer.balance), 0)).filter(Customer.ctype == "upstream", Customer.deleted_at.is_(None)).scalar() or 0
     bill_balance = round(float(up_balance) - float(down_balance), 2)
-    wallet = db.query(DailyBill).filter(DailyBill.biz_date == date.today()).first()
+    latest = _latest_biz_date(db)
+    wallet = db.query(DailyBill).filter(DailyBill.biz_date == latest).first()
     wallet_balance = float(wallet.wallet_balance) if wallet and wallet.wallet_balance is not None else 0
     rate = _get_usdt_rate(db)
     total_balance = round(bill_balance + wallet_balance * rate, 2)
-    month_start = date.today().replace(day=1)
+    month_start = latest.replace(day=1)
     bill_profit = db.query(func.coalesce(func.sum(Bill.profit), 0)).join(
         Customer, Bill.customer_id == Customer.id).filter(
         Bill.biz_date >= month_start, Customer.ctype == "downstream",
@@ -145,7 +154,7 @@ def agent_trend(db: Session = Depends(get_db), _=Depends(get_current_user),
     """客户统计：以客户（上游+下游）为单位，每天的在执订单/供货量/销售额/利润/余额（上游无利润）"""
     from collections import defaultdict
     from ..models import AgentOrderSnapshot
-    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else date.today()
+    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else _latest_biz_date(db)
     start_d = datetime.strptime(start, "%Y-%m-%d").date() if start else (end_d - timedelta(days=6))
     if start_d > end_d:
         start_d, end_d = end_d, start_d
@@ -232,7 +241,7 @@ def notifications(db: Session = Depends(get_db), _=Depends(get_current_user),
 @router.get("/trend")
 def trend(db: Session = Depends(get_db), _=Depends(get_current_user),
           start: str = "", end: str = ""):
-    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else date.today()
+    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else _latest_biz_date(db)
     start_d = datetime.strptime(start, "%Y-%m-%d").date() if start else (end_d - timedelta(days=6))
     if start_d > end_d:
         start_d, end_d = end_d, start_d
@@ -267,7 +276,7 @@ def trend(db: Session = Depends(get_db), _=Depends(get_current_user),
 @router.get("/daily-bills")
 def daily_bills(db: Session = Depends(get_db), _=Depends(get_current_user),
                 start: str = "", end: str = ""):
-    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else date.today()
+    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else _latest_biz_date(db)
     start_d = datetime.strptime(start, "%Y-%m-%d").date() if start else (end_d - timedelta(days=29))
     if start_d > end_d:
         start_d, end_d = end_d, start_d
@@ -323,7 +332,7 @@ def set_daily_bill_wallet(body: dict, db: Session = Depends(get_db), _=Depends(g
 @router.get("/category-pie")
 def category_pie(db: Session = Depends(get_db), _=Depends(get_current_user),
                  start: str = "", end: str = ""):
-    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else date.today()
+    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else _latest_biz_date(db)
     start_d = datetime.strptime(start, "%Y-%m-%d").date() if start else (end_d - timedelta(days=6))
     rows = (db.query(DailyData.cat1, func.count(DailyData.id))
             .filter(DailyData.biz_date >= start_d, DailyData.biz_date <= end_d,
@@ -335,7 +344,7 @@ def category_pie(db: Session = Depends(get_db), _=Depends(get_current_user),
 @router.get("/category2-pie")
 def category2_pie(db: Session = Depends(get_db), _=Depends(get_current_user),
                   start: str = "", end: str = ""):
-    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else date.today()
+    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else _latest_biz_date(db)
     start_d = datetime.strptime(start, "%Y-%m-%d").date() if start else (end_d - timedelta(days=6))
     rows = (db.query(DailyData.cat2, func.count(DailyData.id))
             .filter(DailyData.biz_date >= start_d, DailyData.biz_date <= end_d,
@@ -347,7 +356,7 @@ def category2_pie(db: Session = Depends(get_db), _=Depends(get_current_user),
 @router.get("/channel-pie")
 def channel_pie(db: Session = Depends(get_db), _=Depends(get_current_user),
                 start: str = "", end: str = ""):
-    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else date.today()
+    end_d = datetime.strptime(end, "%Y-%m-%d").date() if end else _latest_biz_date(db)
     start_d = datetime.strptime(start, "%Y-%m-%d").date() if start else (end_d - timedelta(days=6))
     rows = (db.query(DailyData.channel, func.count(DailyData.id))
             .filter(DailyData.biz_date >= start_d, DailyData.biz_date <= end_d,
