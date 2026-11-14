@@ -14,12 +14,12 @@ from ..database import get_db
 from ..deps import get_current_user
 from ..models import Product, ProductSale, Customer, Template, ProductCustomerPrice
 from ..pagination import paginate, ok_page
-from ..regions import PROVINCES, CITIES
+from ..regions import PROVINCES, CITIES, REGION_ALIASES, normalize_region
 from ..utils import fmt_dt
 
 router = APIRouter(prefix="/api", tags=["products"])
 
-ALL_REGIONS = set(PROVINCES) | {c for cities in CITIES.values() for c in cities}
+ALL_REGIONS = set(PROVINCES) | {c for cities in CITIES.values() for c in cities} | set(REGION_ALIASES.keys())
 
 
 def _ulabel(user):
@@ -243,7 +243,7 @@ def create_product_sale(body: dict, db: Session = Depends(get_db), user=Depends(
         raise HTTPException(status_code=422, detail="请选择客户")
     if not body.get("product_id"):
         raise HTTPException(status_code=422, detail="请选择产品")
-    region = (body.get("region") or "").strip()
+    region = normalize_region((body.get("region") or "").strip())
     if not region:
         raise HTTPException(status_code=422, detail="请选择地区")
     if region not in ALL_REGIONS:
@@ -283,7 +283,7 @@ def update_product_sale(sid: int, body: dict, db: Session = Depends(get_db), use
     if body.get("product_id") is not None:
         s.product_id = body.get("product_id")
     if body.get("region") is not None:
-        region = (body.get("region") or "").strip()
+        region = normalize_region((body.get("region") or "").strip())
         if not region:
             raise HTTPException(status_code=422, detail="请选择地区")
         if region not in ALL_REGIONS:
@@ -332,7 +332,7 @@ def save_product_sales_batch(body: dict, db: Session = Depends(get_db), user=Dep
 
     affected_customers = set()
     for r in rows:
-        region = (r.get("region") or "").strip()
+        region = normalize_region((r.get("region") or "").strip())
         if not region:
             raise HTTPException(status_code=422, detail="请选择地区")
         if region not in ALL_REGIONS:
@@ -443,7 +443,7 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
             cust_raw = int(cust_raw)
         cust_str = "" if cust_raw is None else str(cust_raw).strip()
         prod_str = "" if prod_col is None else str(getv(prod_col) or "").strip()
-        region_str = "" if region_col is None else str(getv(region_col) or "").strip()
+        region_str = normalize_region("" if region_col is None else str(getv(region_col) or "").strip())
 
         sale_date = _date(date_raw)
         if not sale_date:

@@ -1073,13 +1073,14 @@ def _check_repeat_days(db):
 
 
 def _region_violation(o, dp, dc):
-    """日活记录地区是否超出订单要求地区（违规）：True=违规"""
-    provs = [p for p in re.split(r"[|｜,，;；]", o.province or "") if p.strip()]
-    cities = [c for c in re.split(r"[|｜,，;；]", o.city or "") if c.strip()]
-    excl_provs = [p for p in re.split(r"[|｜,，;；]", o.excl_province or "") if p.strip()]
-    excl_cities = [c for c in re.split(r"[|｜,，;；]", o.excl_city or "") if c.strip()]
-    dp = (dp or "").strip()
-    dc = (dc or "").strip()
+    """日活记录地区是否超出订单要求地区（违规）：True=违规（省/市均按主名归一化后比较）"""
+    from ..regions import normalize_region
+    provs = [normalize_region(p) for p in re.split(r"[|｜,，;；]", o.province or "") if p.strip()]
+    cities = [normalize_region(c) for c in re.split(r"[|｜,，;；]", o.city or "") if c.strip()]
+    excl_provs = [normalize_region(p) for p in re.split(r"[|｜,，;；]", o.excl_province or "") if p.strip()]
+    excl_cities = [normalize_region(c) for c in re.split(r"[|｜,，;；]", o.excl_city or "") if c.strip()]
+    dp = normalize_region(dp)
+    dc = normalize_region(dc)
     if dp and dp in excl_provs:
         return True
     if dc and dc in excl_cities:

@@ -18,7 +18,7 @@ from ..schemas import OrderBody, StopBody, BatchStopBody, OrderDistConfigBody, G
 from ..pagination import paginate, ok_page
 from ..utils import fmt_dt, fmt_date, norm_region
 from ..tidabiao import _order_type, _region_mode
-from ..regions import CITIES, PROVINCES, MUNICIPALITIES
+from ..regions import CITIES, PROVINCES, MUNICIPALITIES, normalize_region
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -288,11 +288,11 @@ def _validate_entity_fields(db, body, exclude_order_id=None):
     province_valid = set(PROVINCES) | {"全国"}
     city_valid = {c for cities in CITIES.values() for c in cities}
     for p in re.split(r"[|｜,，;；]", body.province or ""):
-        p = p.strip()
+        p = normalize_region(p)
         if p and p not in province_valid:
             errors.append(f"省份「{p}」不存在")
     for c in re.split(r"[|｜,，;；]", body.city or ""):
-        c = c.strip()
+        c = normalize_region(c)
         if not c:
             continue
         if c in MUNICIPALITIES:
@@ -300,11 +300,11 @@ def _validate_entity_fields(db, body, exclude_order_id=None):
         elif c not in city_valid:
             errors.append(f"地市「{c}」不存在")
     for p in re.split(r"[|｜,，;；]", body.excl_province or ""):
-        p = p.strip()
+        p = normalize_region(p)
         if p and p not in province_valid:
             errors.append(f"排除省份「{p}」不存在")
     for c in re.split(r"[|｜,，;；]", body.excl_city or ""):
-        c = c.strip()
+        c = normalize_region(c)
         if not c:
             continue
         if c in MUNICIPALITIES:
@@ -1353,11 +1353,11 @@ async def import_orders(file: UploadFile = File(...), db: Session = Depends(get_
         if v and v not in operator_valid:
             precheck.append({"row": row_no, "reason": f"运营商「{v}」不存在"})
         for p in re.split(r"[|｜,，;；]", str(r.get("province") or "")):
-            p = p.strip()
+            p = normalize_region(p)
             if p and p not in province_valid:
                 precheck.append({"row": row_no, "reason": f"省份「{p}」不存在"})
         for c in re.split(r"[|｜,，;；]", str(r.get("city") or "")):
-            c = c.strip()
+            c = normalize_region(c)
             if not c:
                 continue
             if c in MUNICIPALITIES:
@@ -1365,11 +1365,11 @@ async def import_orders(file: UploadFile = File(...), db: Session = Depends(get_
             elif c not in city_valid:
                 precheck.append({"row": row_no, "reason": f"地市「{c}」不存在"})
         for p in re.split(r"[|｜,，;；]", str(r.get("excl_province") or "")):
-            p = p.strip()
+            p = normalize_region(p)
             if p and p not in province_valid:
                 precheck.append({"row": row_no, "reason": f"排除省份「{p}」不存在"})
         for c in re.split(r"[|｜,，;；]", str(r.get("excl_city") or "")):
-            c = c.strip()
+            c = normalize_region(c)
             if not c:
                 continue
             if c in MUNICIPALITIES:

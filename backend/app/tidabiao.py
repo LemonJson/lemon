@@ -10,7 +10,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .models import Channel, Customer, Operator, OrderTemplate, Template
-from .regions import CITIES, PROVINCES
+from .regions import CITIES, PROVINCES, normalize_region
 from .utils import norm_region
 
 
@@ -91,10 +91,10 @@ def _city_value(o):
     """地市列内容：有选中地市则用选中地市；否则排除地市所在省的其它地市（反查省份）"""
     if o.city:
         return o.city
-    excl = _split_list(o.excl_city)
+    excl = [normalize_region(x) for x in _split_list(o.excl_city)]
     if not excl:
         return o.city or ""
-    provs = _split_list(o.province)
+    provs = [normalize_region(x) for x in _split_list(o.province)]
     # 省份为空/全国时，从排除地市反查所在省
     if not provs or "全国" in provs:
         provs = []
@@ -114,7 +114,7 @@ def _province_value(o):
     """省份列内容：有选中省份(非全国)则用选中省份；全国且有排除省份则填排除省份以外的所有省份；全国则填全国"""
     if o.province and "全国" not in o.province:
         return o.province
-    excl = _split_list(o.excl_province)
+    excl = [normalize_region(x) for x in _split_list(o.excl_province)]
     if excl:
         return "|".join(p for p in PROVINCES if p not in excl)
     return "全国" if ("全国" in (o.province or "")) else (o.province or "")
