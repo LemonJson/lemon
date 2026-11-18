@@ -427,17 +427,16 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
     products = db.query(Product).all()
     prod_by_name = {p.name: p for p in products if p.name}
 
+    # 事前检查：遍历所有行，收集错误（含行号），同时缓存正确行的解析结果
     errors = []
-    imported = 0
-    updated = 0
-    affected = set()  # (customer_id, sale_date)
-    for values in rows:
+    parsed = []
+    for row_no, values in enumerate(rows, 2):
         def getv(i):
             return values[i] if i is not None and i < len(values) else None
 
         date_raw = getv(date_col)
         if date_raw is None or str(date_raw).strip() == "":
-            continue  # 日期列为空的行直接跳过，不检查不导入
+            continue  # 日期列为空的行跳过
         cust_raw = getv(cust_col)
         if isinstance(cust_raw, float) and cust_raw.is_integer():
             cust_raw = int(cust_raw)
@@ -447,28 +446,28 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
 
         sale_date = _date(date_raw)
         if not sale_date:
-            errors.append(f"日期无效：{date_raw}")
+            errors.append(f"第 {row_no} 行：日期无效「{date_raw}」")
             continue
         cust = cust_by_name.get(cust_str)
         if not cust:
-            errors.append(f"客户名称不存在：{cust_str}")
+            errors.append(f"第 {row_no} 行：客户名称不存在「{cust_str}」")
             continue
         if not region_str:
-            errors.append(f"地区为空")
+            errors.append(f"第 {row_no} 行：地区为空")
             continue
         if region_str not in ALL_REGIONS:
-            errors.append(f"地区不存在：{region_str}")
+            errors.append(f"第 {row_no} 行：地区不存在「{region_str}」")
             continue
         prod = prod_by_name.get(prod_str)
         if not prod:
-            errors.append(f"产品不存在：{prod_str}")
+            errors.append(f"第 {row_no} 行：产品不存在「{prod_str}」")
             continue
 
         qty_raw = getv(qty_col)
         qty_str = "" if qty_raw is None else str(qty_raw).strip()
         qty_num = _parse_num(qty_raw)
         if qty_num is None or qty_num <= 0 or qty_num != int(qty_num):
-            errors.append(f"数量无效：{qty_str}")
+            errors.append(f"第 {row_no} 行：数量无效「{qty_str}」")
             continue
         qty = int(qty_num)
 
@@ -482,54 +481,68 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
         if pp_str == "" or sp_str == "":
             rpp, rsp = _resolve_prices(db, cust.id, prod.id)
 
-        # 进货单价
         if pp_str != "":
             pp_num = _parse_num(pp_raw)
             if pp_num is None or pp_num < 0:
-                errors.append(f"进货单价无效：{pp_str}")
+                errors.append(f"第 {row_no} 行：进货单价无效「{pp_str}」")
                 continue
             pp = pp_num
         else:
             pp = rpp if rpp is not None else 0.0
 
-        # 出货单价
         if sp_str != "":
             sp_num = _parse_num(sp_raw)
             if sp_num is None or sp_num <= 0:
-                errors.append(f"出货单价无效：{sp_str}")
+                errors.append(f"第 {row_no} 行：出货单价无效「{sp_str}」")
                 continue
             sp = sp_num
         else:
             sp = rsp if rsp is not None else 0.0
             if sp <= 0:
-                errors.append(f"出货单价无效：产品未设置代理售价或默认售价")
+                errors.append(f"第 {row_no} 行：出货单价无效（产品未设置代理售价或默认售价）")
                 continue
 
         sales_amount = round(qty * sp, 2)
         profit = round(qty * (sp - pp), 2)
-        existing = db.query(ProductSale).filter(ProductSale.sale_date == sale_date,
-                                                 ProductSale.customer_id == cust.id,
-                                                 ProductSale.product_id == prod.id,
-                                                 ProductSale.region == region_str,
+        parsed.append({"sale_date": sale_date, "cust_id": cust.id, "prod_id": prod.id,
+                       "region": region_str, "qty": qty, "pp": pp, "sp": sp,
+                       "sales_amount": sales_amount, "profit": profit})
+
+    # 有错误：整个文件都不导入
+    if errors:
+        shown = "；".join(errors[:20])
+        more = f"… 等共 {len(errors)} 条" if len(errors) > 20 else ""
+        return {"code": 1, "data": {"errors": errors},
+                "msg": f"导入失败，整个文件未导入：{shown}{more}"}
+
+    # 无错误：开始导入
+    imported = 0
+    updated = 0
+    affected = set()  # (customer_id, sale_date)
+    for p in parsed:
+        existing = db.query(ProductSale).filter(ProductSale.sale_date == p["sale_date"],
+                                                 ProductSale.customer_id == p["cust_id"],
+                                                 ProductSale.product_id == p["prod_id"],
+                                                 ProductSale.region == p["region"],
                                                  ProductSale.deleted_at.is_(None)).first()
         if existing:
-            existing.qty = qty
-            existing.purchase_price = pp
-            existing.sales_price = sp
-            existing.sales_amount = sales_amount
-            existing.profit = profit
-            existing.region = region_str
+            existing.qty = p["qty"]
+            existing.purchase_price = p["pp"]
+            existing.sales_price = p["sp"]
+            existing.sales_amount = p["sales_amount"]
+            existing.profit = p["profit"]
+            existing.region = p["region"]
             existing.updated_by = _ulabel(user)
             updated += 1
         else:
-            s = ProductSale(sale_date=sale_date, customer_id=cust.id, product_id=prod.id,
-                            region=region_str, qty=qty, purchase_price=pp, sales_price=sp,
-                            sales_amount=sales_amount, profit=profit)
+            s = ProductSale(sale_date=p["sale_date"], customer_id=p["cust_id"], product_id=p["prod_id"],
+                            region=p["region"], qty=p["qty"], purchase_price=p["pp"], sales_price=p["sp"],
+                            sales_amount=p["sales_amount"], profit=p["profit"])
             s.created_by = _ulabel(user)
             s.updated_by = _ulabel(user)
             db.add(s)
             imported += 1
-        affected.add((cust.id, sale_date))
+        affected.add((p["cust_id"], p["sale_date"]))
     db.commit()
 
     # 生成账单数据：按日期分组重新生成受影响客户账单
@@ -541,11 +554,9 @@ async def import_product_sales(file: UploadFile = File(...), db: Session = Depen
         from ..routers.data import _regen_downstream_bills
         _regen_downstream_bills(db, d, cids, _ulabel(user))
 
-    msg = f"导入 {imported} 条，更新 {updated} 条"
-    if errors:
-        msg += f"，失败 {len(errors)} 条：{'；'.join(errors[:10])}"
-    return {"code": 0, "data": {"imported": imported, "updated": updated, "errors": errors,
-                                "dates": sorted([d.strftime("%Y-%m-%d") for d in by_date.keys()])}, "msg": msg}
+    return {"code": 0, "data": {"imported": imported, "updated": updated,
+                                "dates": sorted([d.strftime("%Y-%m-%d") for d in by_date.keys()])},
+            "msg": f"导入 {imported} 条，更新 {updated} 条"}
 
 
 @router.get("/product-sales/export")
