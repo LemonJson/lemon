@@ -209,6 +209,7 @@ class Order(Base, TimestampMixin, SoftDeleteMixin):
     export_filename = Column(String(200))         # 导出文件名（文本）
     add_name = Column(Boolean, default=False)     # 是否加名 是/否
     check_collision = Column(Boolean, default=False)  # 是否撞库 是/否
+    stop_reason = Column(String(200))             # 停单原因
     created_by = Column(String(50))               # 创建人
     updated_by = Column(String(50))               # 更新人
     # ===== 子表名称快照（订单创建/更新时固化，子表改名不影响历史订单展示）=====
@@ -552,3 +553,11 @@ class AgentOrderSnapshot(Base, TimestampMixin):
     biz_date = Column(Date, nullable=False)                 # 日期
     customer_id = Column(Integer, ForeignKey("customer.id"))  # 客户（上游/下游）
     active_orders = Column(Integer, default=0)              # 在执订单数快照
+
+
+class GroupConfig(Base, TimestampMixin):
+    """小组名出数上限配置（小组名来源为在执订单的 group_name）"""
+    __tablename__ = "group_config"
+    id = Column(Integer, primary_key=True)
+    group_name = Column(String(100), unique=True, nullable=False)  # 小组名
+    limit = Column(Integer, default=0)                              # 出数上限（条数）

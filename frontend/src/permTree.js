@@ -104,6 +104,12 @@ export const PERM_TREE = [
     { code: 'operator:edit', label: '编辑' },
     { code: 'operator:delete', label: '删除' },
   ] },
+  { module: 'group', label: '小组监控', perm: 'group:view', buttons: [
+    { code: 'group:create', label: '新增' },
+    { code: 'group:edit', label: '编辑' },
+    { code: 'group:delete', label: '删除' },
+    { code: 'group:stop', label: '停单' },
+  ] },
   { module: 'template', label: '模版管理', perm: 'template:view', buttons: [
     { code: 'template:create', label: '新增' },
     { code: 'template:edit', label: '编辑' },

@@ -850,6 +850,12 @@ export default function Orders({ variant = 'orders' }) {
             <div className="field"><label>更新时间</label><div className="readonly">{detail.updated_at || '—'}</div></div>
             <div className="field"><label>更新人</label><div className="readonly">{detail.updated_by || '—'}</div></div>
           </div>
+          {(detail.stop_reason || detail.stop_date) && (
+            <div className="row">
+              <div className="field"><label>停单日期</label><div className="readonly">{detail.stop_date || '—'}</div></div>
+              <div className="field"><label>停单原因</label><div className="readonly">{detail.stop_reason || '—'}</div></div>
+            </div>
+          )}
           <div className="foot"><button className="btn primary" onClick={() => setDetail(null)}>关闭</button></div>
         </Modal>
       )}

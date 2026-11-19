@@ -12,6 +12,7 @@ export const MENU_PERMS = [
   { perm: 'category:view', label: '品类管理' },
   { perm: 'channel:view', label: '渠道管理' },
   { perm: 'operator:view', label: '运营商管理' },
+  { perm: 'group:view', label: '小组监控' },
   { perm: 'template:view', label: '模版管理' },
   { perm: 'product:view', label: '产品管理' },
   { perm: 'account:view', label: '账户管理' },

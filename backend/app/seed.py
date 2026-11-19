@@ -44,6 +44,7 @@ def seed(db):
         ("category:view", "品类管理", "master"),
         ("channel:view", "渠道管理", "master"),
         ("operator:view", "运营商管理", "master"),
+        ("group:view", "小组监控", "master"),
         ("template:view", "模版管理", "master"),
         ("product:view", "产品管理", "master"),
         ("config:view", "配置中心", "system"),
@@ -89,6 +90,7 @@ def seed(db):
         ("category", "品类管理", ["create:新增", "edit:编辑", "delete:删除", "import:导入"]),
         ("channel", "渠道管理", ["create:新增", "edit:编辑", "delete:删除"]),
         ("operator", "运营商管理", ["create:新增", "edit:编辑", "delete:删除"]),
+        ("group", "小组监控", ["create:新增", "edit:编辑", "delete:删除", "stop:停单"]),
         ("template", "模版管理", ["create:新增", "edit:编辑", "delete:删除", "upload:上传文件", "download:下载"]),
         ("products", "产品管理", ["create:新增", "edit:编辑", "copy:复制", "delete:删除", "price:代理售价"]),
         ("account", "账户管理", ["create:新增账户", "edit:编辑", "reset:重置密码", "delete:删除", "role_perms:角色权限", "create_role:新增角色"]),
@@ -177,7 +179,7 @@ def _backfill_role_permissions(db):
     """非 admin 角色默认开放除系统管理外的所有菜单查看权限（保持既有行为，管理员可再收紧）"""
     default_view = ["dashboard:view", "order:view", "customer:view", "bill:view", "alert:view",
                     "daily:view", "tidabiao:view", "wash:view", "fund:view", "file:view",
-                    "parts:view", "category:view", "channel:view", "operator:view", "template:view",
+                    "parts:view", "category:view", "channel:view", "operator:view", "group:view", "template:view",
                     "product:view"]
     perm_id = {p.code: p.id for p in db.query(SysPermission).all()}
     for r in db.query(SysRole).filter(SysRole.code != "admin").all():
@@ -240,7 +242,7 @@ def _backfill_granular_permissions(db):
     """把旧的粗粒度菜单权限（data:view / master:view）细化到每个菜单，兼容已有角色"""
     groups = {
         "data:view": ["daily:view", "tidabiao:view", "wash:view", "fund:view", "file:view"],
-        "master:view": ["parts:view", "category:view", "channel:view", "operator:view", "template:view"],
+        "master:view": ["parts:view", "category:view", "channel:view", "operator:view", "group:view", "template:view"],
     }
     perm_id = {p.code: p.id for p in db.query(SysPermission).all()}
     changed = False

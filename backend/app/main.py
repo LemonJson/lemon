@@ -15,7 +15,7 @@ from sqlalchemy import text
 
 from .config import CORS_ORIGINS
 from .database import Base, engine, SessionLocal
-from .routers import auth, users, customers, orders, master, data, dashboard, ai, order_templates, templates, logs, products, trash
+from .routers import auth, users, customers, orders, master, data, dashboard, ai, order_templates, templates, logs, products, trash, groups
 from .seed import seed
 
 
@@ -110,6 +110,7 @@ def _migrate_schema():
                 ("tpl_code", "VARCHAR(50)"),
                 ("tpl_name", "VARCHAR(100)"),
                 ("template_name", "VARCHAR(100)"),
+                ("stop_reason", "VARCHAR(200)"),
             ]:
                 if col not in order_cols:
                     conn.execute(text(f"ALTER TABLE orders ADD COLUMN {col} {ddl}"))
@@ -271,15 +272,18 @@ def _migrate_schema():
 def _ensure_indexes():
     """给大表补关键索引（幂等，启动时自动创建，避免全表扫描）"""
     indexes = [
-        ("idx_daily_data_phone", "daily_data", "phone"),
-        ("idx_daily_data_biz_date", "daily_data", "biz_date"),
-        ("idx_daily_data_task_id", "daily_data", "task_id"),
-        ("idx_orders_task_id", "orders", "task_id"),
+        ("idx_daily_data_phone", "daily_data", ["phone"]),
+        ("idx_daily_data_biz_date", "daily_data", ["biz_date"]),
+        ("idx_daily_data_task_id", "daily_data", ["task_id"]),
+        ("idx_daily_data_group_name", "daily_data", ["group_name"]),
+        ("idx_daily_data_group_biz", "daily_data", ["group_name", "biz_date"]),
+        ("idx_orders_task_id", "orders", ["task_id"]),
     ]
     try:
         with engine.begin() as conn:
-            for name, table, col in indexes:
-                conn.execute(text(f'CREATE INDEX IF NOT EXISTS "{name}" ON "{table}" ("{col}")'))
+            for name, table, cols in indexes:
+                col_list = ", ".join(f'"{c}"' for c in cols)
+                conn.execute(text(f'CREATE INDEX IF NOT EXISTS "{name}" ON "{table}" ({col_list})'))
     except Exception as e:  # noqa
         print(f"[indexes] 跳过: {e}")
 
@@ -569,6 +573,7 @@ app.include_router(templates.router)
 app.include_router(logs.router)
 app.include_router(products.router)
 app.include_router(trash.router)
+app.include_router(groups.router)
 
 
 def _scheduler_loop():

@@ -42,6 +42,7 @@ export default function App() {
         <Route path="templates" element={<TemplateManager />} />
         <Route path="channels" element={<SimpleList kind="channels" />} />
         <Route path="operators" element={<SimpleList kind="operators" />} />
+        <Route path="groups" element={<SimpleList kind="groups" />} />
         <Route path="bills" element={<SimpleList kind="bills" />} />
         <Route path="alerts" element={<SimpleList kind="alerts" />} />
         <Route path="accounts" element={<SimpleList kind="users" />} />

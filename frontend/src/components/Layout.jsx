@@ -7,7 +7,7 @@ const TITLE_MAP = {
   '/': '工作台', '/orders': '订单管理', '/daily': '日活管理', '/product-sales': '产品销售', '/fund': '公积金',
   '/wash-names': '洗名库',
   '/customers': '客户管理', '/parts': '配件管理', '/categories': '品类管理',
-  '/channels': '渠道管理', '/operators': '运营商管理', '/bills': '账单管理',
+  '/channels': '渠道管理', '/operators': '运营商管理', '/groups': '小组监控', '/bills': '账单管理',
   '/source-files': '文件管理',
   '/alerts': '预警中心', '/accounts': '账户管理', '/templates': '模版管理',
   '/tidabiao-history': '提单历史',
@@ -21,6 +21,7 @@ const TITLE_MAP = {
 const MENUS = [
   { key: '/', name: '工作台', icon: '📊', perm: 'dashboard:view' },
   { key: '/orders', name: '订单管理', icon: '📝', perm: 'order:view' },
+  { key: '/groups', name: '小组监控', icon: '🎯', perm: 'group:view' },
   { key: '/daily', name: '日活管理', icon: '📈', perm: 'daily:view' },
   { key: '/product-sales', name: '产品销售', icon: '🛍️', perm: 'product:view' },
   { key: '/bills', name: '账单管理', icon: '💰', perm: 'bill:view' },

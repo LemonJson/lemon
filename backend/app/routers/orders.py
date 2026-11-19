@@ -203,6 +203,7 @@ def _order_dict(db, o: Order, alert_order_ids=None, cache=None) -> dict:
         "excl_province": norm_region(o.excl_province), "excl_city": norm_region(o.excl_city),
         "qty": o.qty, "age_min": o.age_min, "age_max": o.age_max, "pv": o.pv,
         "created_at": fmt_dt(o.created_at), "stop_date": fmt_date(o.stop_date) if o.stop_date else None,
+        "stop_reason": o.stop_reason or "",
         "created_by": o.created_by or "", "updated_by": o.updated_by or "",
         "has_alert": (o.id in alert_order_ids and o.status in ("在执", "待停")) if alert_order_ids is not None else False,
     }
@@ -801,6 +802,7 @@ def stop_order(oid: int, body: StopBody, db: Session = Depends(get_db), user=Dep
     o.end_date = o.order_date
     o.status = "待停"
     o.stop_date = date.today()
+    o.stop_reason = (body.reason or "").strip()
     o.updated_at = datetime.now()
     o.updated_by = _user_label(user)
     db.query(Alert).filter(Alert.type == "停单提醒", Alert.order_id == o.id, Alert.status == "未处理").delete()
@@ -845,6 +847,7 @@ def batch_stop(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(
         o.end_date = o.order_date
         o.status = "待停"
         o.stop_date = date.today()
+        o.stop_reason = (body.reason or "").strip()
         o.updated_at = datetime.now()
         o.updated_by = _user_label(user)
     if ids:

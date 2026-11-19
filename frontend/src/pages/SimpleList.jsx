@@ -33,6 +33,9 @@ const IconKey = (
 const IconLock = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
 )
+const IconStop = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></svg>
+)
 
 function IconBtn({ title, color, onClick, children }) {
   return (
@@ -86,6 +89,15 @@ const KINDS = {
     title: '运营商', endpoint: '/api/operators', perm: 'operator',
     cols: [{ k: 'name', l: '运营商组合' }, { k: 'status', l: '状态' }], simple: true,
   },
+  groups: {
+    title: '小组监控', endpoint: '/api/groups', perm: 'group',
+    filterCols: [{ k: 'group_name', l: '小组名' }, { k: 'status', l: '状态' }, { k: 'warn', l: '预警' }],
+    cols: [
+      { k: 'group_name', l: '小组名' }, { k: 'limit', l: '出数上限', num: true },
+      { k: 'daily_total', l: '累计日活数', num: true }, { k: 'daily_avg', l: '日均日活', num: true },
+      { k: 'order_count', l: '关联订单数', num: true }, { k: 'status', l: '状态' },
+    ], group: true,
+  },
   urls: {
     title: '配件管理', endpoint: '/api/urls', perm: 'parts',
     cols: [
@@ -126,7 +138,7 @@ export default function SimpleList({ kind }) {
   const cfg = KINDS[kind]
   const { can } = useButtonPerm()
   const showBatchDel = !!cfg.batchDel && can(`${cfg.perm}:batch_delete`)
-  const hasRowOps = !!(cfg.simple || cfg.editUrl || cfg.del || cfg.dl || cfg.handle || cfg.reset || cfg.pwd || cfg.detail || cfg.dailyEdit)
+  const hasRowOps = !!(cfg.simple || cfg.editUrl || cfg.del || cfg.dl || cfg.handle || cfg.reset || cfg.pwd || cfg.detail || cfg.dailyEdit || cfg.group)
   const { toast, showError } = useToast()
   const nav = useNavigate()
   const [searchParams] = useSearchParams()
@@ -143,6 +155,9 @@ export default function SimpleList({ kind }) {
   const [cascadeOpts, setCascadeOpts] = useState(null)
   const [customers, setCustomers] = useState([])
   const [simpleModal, setSimpleModal] = useState(null) // {name, status}
+  const [groupModal, setGroupModal] = useState(null) // {id?, group_name, limit}
+  const [groupOptions, setGroupOptions] = useState([])
+  const [groupStop, setGroupStop] = useState(null) // {id, group_name, order_date, reason}
   const [dailyEdit, setDailyEdit] = useState(null) // {id, biz_date, upstream, task_id, ...}
   const [urlModal, setUrlModal] = useState(null) // {mode, id?, name, level, owner_id, channel_id, platform_id, urls:[string]}
   const [urlOptions, setUrlOptions] = useState({ channels: [], platforms: [] })
@@ -420,6 +435,36 @@ export default function SimpleList({ kind }) {
       }, '正在删除…')
     }
   }
+  function openGroupCreate() {
+    api.get('/api/groups/options').then(r => { setGroupOptions(r.data || []); setGroupModal({ id: null, group_name: '', limit: 0 }) }).catch(e => showError(e.message))
+  }
+  function openGroupEdit(r) {
+    setGroupModal({ id: r.id, group_name: r.group_name, limit: r.limit })
+  }
+  async function saveGroup() {
+    const body = { group_name: (groupModal.group_name || '').trim(), limit: Number(groupModal.limit) || 0 }
+    try {
+      await withBusy(async () => {
+        if (groupModal.id) await api.put(`/api/groups/${groupModal.id}`, body)
+        else await api.post('/api/groups', body)
+        toast('已保存'); setGroupModal(null); load()
+      }, '正在保存…')
+    } catch (e) { showError(e.message) }
+  }
+  function stopGroup(r) {
+    const d = new Date()
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    setGroupStop({ id: r.id, group_name: r.group_name, order_date: today, reason: '业务调整' })
+  }
+  async function saveGroupStop() {
+    if (!groupStop.order_date) { showError('请选择更新日期'); return }
+    try {
+      await withBusy(async () => {
+        const res = await api.post(`/api/groups/${groupStop.id}/stop`, { order_date: groupStop.order_date, reason: groupStop.reason })
+        toast(res.msg || '已提交停单'); setGroupStop(null); load()
+      }, '正在停单…')
+    } catch (e) { showError(e.message) }
+  }
   function toggleSelect(id) {
     setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id])
   }
@@ -632,6 +677,7 @@ export default function SimpleList({ kind }) {
       if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`
       return `${(v / 1024 / 1024).toFixed(1)} MB`
     }
+    if (kind === 'groups' && c.k === 'status') return <Badge value={v} />
     if (['status'].includes(c.k)) return <Badge value={v === 1 ? '启用' : v === 0 ? '停用' : v} />
     if (['level', 'gender', 'deposit_status', 'wash_status', 'type'].includes(c.k)) return <Badge value={v} />
     if (c.num && typeof v === 'number') return v.toLocaleString()
@@ -1059,6 +1105,7 @@ export default function SimpleList({ kind }) {
         {kind === 'daily' && can('daily:batch_delete') && <button className="btn danger" onClick={() => setBatchDelModal(true)}>⚠️ 批量删除</button>}
         {cfg.billExp && can('bill:generate') && <button className="btn orange" onClick={() => { setGenBillCustomerIds(customers.filter(c => c.ctype === 'upstream' || c.ctype === 'downstream').map(c => c.id)); setGenBillModal(true) }}>生成账单</button>}
         {cfg.simple && can(`${cfg.perm}:create`) && <button className="btn primary" onClick={() => setSimpleModal({ name: '', status: 1 })}>+ 新增</button>}
+        {cfg.group && can('group:create') && <button className="btn primary" onClick={openGroupCreate}>+ 新增配置</button>}
         {cfg.addUrl && can('parts:create') && <button className="btn primary" onClick={openAddUrl}>+ 新增 URL</button>}
         {cfg.clear && can(`${cfg.perm}:clear`) && <button className="btn danger" onClick={clearData}>⚠️ 清空数据</button>}
         {kind === 'users' && can('account:create') && <button className="btn primary" onClick={openUserCreate}>+ 新增账户</button>}
@@ -1080,7 +1127,7 @@ export default function SimpleList({ kind }) {
             <thead><tr>{cfg.showSeq && <th className="num" style={{ width: 56 }}>序号</th>}{showBatchDel && <th style={{ width: 32 }}><input type="checkbox" checked={rows.length > 0 && selected.length === sorted.length} onChange={toggleAll} /></th>}{hasRowOps && <th className="ops">操作</th>}{cols.map(c => <th key={c.k} className={c.num ? 'num' : ''} onClick={() => toggleSort(c.k)}>{c.l}{sort?.k === c.k ? <span className="arr">{sort.dir === 'asc' ? '▲' : '▼'}</span> : ''}</th>)}</tr></thead>
             <tbody>
               {sorted.map((r, i) => (
-                <tr key={r.id}>
+                <tr key={r.id} className={(kind === 'groups' && r.warn) ? 'row-alert' : ''}>
                   {cfg.showSeq && <td className="num">{(page - 1) * perPage + i + 1}</td>}
                   {showBatchDel && <td><input type="checkbox" checked={selected.includes(r.id)} onChange={() => toggleSelect(r.id)} /></td>}
                   {hasRowOps && <td className="ops">
@@ -1088,7 +1135,9 @@ export default function SimpleList({ kind }) {
                     {cfg.simple && can(`${cfg.perm}:edit`) && <button className="btn small" onClick={() => toast('编辑')}>编辑</button>}
                     {cfg.editUrl && can('parts:edit') && <button className="btn small" onClick={() => openEditUrl(r)}>编辑</button>}
                     {cfg.dailyEdit && can('daily:edit') && <button className="btn small" onClick={() => openDailyEdit(r)}>编辑</button>}
-                    {cfg.del && can(`${cfg.perm}:delete`) && <button className="btn small danger" onClick={() => del(r.id)}>删除</button>}
+                    {cfg.group && can('group:stop') && r.status === '在执' && <IconBtn title="停单" color="#d97706" onClick={() => stopGroup(r)}>{IconStop}</IconBtn>}
+                    {cfg.group && can('group:edit') && <IconBtn title="编辑" color="#2563eb" onClick={() => openGroupEdit(r)}>{IconEdit}</IconBtn>}
+                    {cfg.group && can('group:delete') && <IconBtn title="删除" color="#dc2626" onClick={() => del(r.id)}>{IconDelete}</IconBtn>}
                     {cfg.dl && can('file:download') && <button className="btn small" onClick={() => downloadSourceFile(r)}>下载</button>}
                     {cfg.handle && r.type === '账单预警' && can('alert:handle') && <button className="btn small primary" onClick={() => openRecharge(r)}>充值</button>}
                     {cfg.handle && r.type === '停单提醒' && can('alert:handle') && <button className="btn small primary" onClick={() => openStop(r)}>停单</button>}
@@ -1114,6 +1163,34 @@ export default function SimpleList({ kind }) {
             <div className="field"><label>状态</label><select value={simpleModal.status} onChange={e => setSimpleModal({ ...simpleModal, status: Number(e.target.value) })}><option value={1}>启用</option><option value={0}>停用</option></select></div>
           </div>
           <div className="foot"><button className="btn" onClick={() => setSimpleModal(null)}>取消</button><button className="btn primary" onClick={addSimple}>保存</button></div>
+        </Modal>
+      )}
+
+      {groupModal && (
+        <Modal title={groupModal.id ? '编辑小组配置' : '新增小组配置'} onClose={() => setGroupModal(null)}>
+          <div className="row">
+            <div className="field"><label>小组名</label>
+              {groupModal.id
+                ? <ClearableInput value={groupModal.group_name} disabled />
+                : <select value={groupModal.group_name} onChange={e => setGroupModal({ ...groupModal, group_name: e.target.value })}><option value="">请选择小组名</option>{groupOptions.map(g => <option key={g} value={g}>{g}</option>)}</select>}
+            </div>
+            <div className="field"><label>出数上限</label><input type="number" min="0" value={groupModal.limit} onChange={e => setGroupModal({ ...groupModal, limit: e.target.value })} /></div>
+          </div>
+          <div className="foot"><button className="btn" onClick={() => setGroupModal(null)}>取消</button><button className="btn primary" onClick={saveGroup}>保存</button></div>
+        </Modal>
+      )}
+
+      {groupStop && (
+        <Modal title="停单确认" onClose={() => setGroupStop(null)}>
+          <div className="note">停单小组「{groupStop.group_name}」下所有在执订单，停单后将停止采集，并将更新日期更新为所选日期。</div>
+          <div className="field" style={{ marginBottom: 12 }}><label className="required">更新日期</label>
+            <input type="date" value={groupStop.order_date} onChange={e => setGroupStop({ ...groupStop, order_date: e.target.value })} /></div>
+          <div className="field" style={{ marginBottom: 12 }}><label>停单原因</label>
+            <select style={{ width: '100%' }} value={groupStop.reason} onChange={e => setGroupStop({ ...groupStop, reason: e.target.value })}><option>业务调整</option><option>数据质量不达标</option><option>合同到期</option><option>其他</option></select></div>
+          <div className="foot">
+            <button className="btn" onClick={() => setGroupStop(null)}>取消</button>
+            <button className="btn danger" onClick={saveGroupStop}>确认停单</button>
+          </div>
         </Modal>
       )}
 
