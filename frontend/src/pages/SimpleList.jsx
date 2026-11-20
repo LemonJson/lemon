@@ -267,6 +267,10 @@ export default function SimpleList({ kind }) {
   }, [rows, sort])
   function cascadeFieldOptions() {
     const base = { ...fieldOptions }
+    if (kind === 'groups') {
+      base.status = ['在执', '已停']
+      base.warn = ['是', '否']
+    }
     if (kind !== 'daily' || !cascadeOpts) return base
     const uniq = arr => [...new Set(arr)]
     if (cascadeOpts.cat1) base.cat1 = cascadeOpts.cat1
