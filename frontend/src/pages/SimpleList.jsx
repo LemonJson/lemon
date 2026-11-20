@@ -93,10 +93,11 @@ const KINDS = {
     title: '小组监控', endpoint: '/api/groups', perm: 'group',
     filterCols: [{ k: 'group_name', l: '小组名' }, { k: 'status', l: '状态' }, { k: 'warn', l: '预警' }],
     cols: [
+      { k: 'status', l: '状态' },
       { k: 'customer_name', l: '一级代理' }, { k: 'group_name', l: '小组名' },
       { k: 'limit', l: '出数上限', num: true },
       { k: 'daily_total', l: '累计日活数', num: true }, { k: 'daily_avg', l: '日均日活', num: true },
-      { k: 'order_count', l: '关联订单数', num: true }, { k: 'status', l: '状态' },
+      { k: 'order_count', l: '关联订单数', num: true },
     ], group: true,
   },
   urls: {
