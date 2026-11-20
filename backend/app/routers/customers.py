@@ -7,7 +7,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, require_admin, require_permission
 from ..models import (Customer, CustomerRecharge, CustomerPrice, Channel,
                       Bill, Order, Url, Category, Alert, SysConfig, Operator, ProductSale)
 from ..schemas import CustomerBody, RechargeBody, PriceBody
@@ -135,7 +135,7 @@ def update_customer_balance(cid: int, body: dict, db: Session = Depends(get_db),
 
 
 @router.delete("/{cid}")
-def delete_customer(cid: int, db: Session = Depends(get_db), _=Depends(require_admin)):
+def delete_customer(cid: int, db: Session = Depends(get_db), _=Depends(require_permission("customer:delete"))):
     c = db.query(Customer).filter(Customer.id == cid).first()
     if not c:
         raise HTTPException(status_code=404, detail="客户不存在")

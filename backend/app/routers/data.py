@@ -15,7 +15,7 @@ from sqlalchemy import func, insert, or_, update, bindparam
 from sqlalchemy.orm import Session
 
 from ..database import get_db, SessionLocal
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, require_admin, require_permission
 from ..models import (DailyData, Fund, Bill, Alert, Customer, Channel, Category,
                       Order, SysConfig, Operator, SourceFile, Template, WashName, Platform,
                       CustomerRecharge, CustomerPrice, Notification, Product, ProductSale)
@@ -964,7 +964,7 @@ async def import_daily_csv(files: List[UploadFile] = File(...), biz_date: str = 
 
 
 @router.post("/daily-data/batch-delete")
-def batch_delete_daily(body: BatchStopBody, db: Session = Depends(get_db), _=Depends(require_admin)):
+def batch_delete_daily(body: BatchStopBody, db: Session = Depends(get_db), _=Depends(require_permission("daily:batch_delete"))):
     rows = db.query(DailyData).filter(DailyData.id.in_(body.ids)).all()
     for r in rows:
         db.delete(r)
@@ -973,7 +973,7 @@ def batch_delete_daily(body: BatchStopBody, db: Session = Depends(get_db), _=Dep
 
 
 @router.post("/daily-data/delete-by-date")
-def delete_daily_by_date(body: GenerateBody, db: Session = Depends(get_db), _=Depends(require_admin)):
+def delete_daily_by_date(body: GenerateBody, db: Session = Depends(get_db), _=Depends(require_permission("daily:batch_delete"))):
     d = _parse_biz_date(body.date)
     if not d:
         raise HTTPException(status_code=422, detail="请选择数据日期")
@@ -3049,7 +3049,7 @@ def _restore_bill_balance(db, bill):
 
 
 @router.post("/bills/batch-delete")
-def batch_delete_bills(body: BatchStopBody, db: Session = Depends(get_db), _=Depends(require_admin)):
+def batch_delete_bills(body: BatchStopBody, db: Session = Depends(get_db), _=Depends(require_permission("bill:batch_delete"))):
     rows = db.query(Bill).filter(Bill.id.in_(body.ids)).all()
     now = datetime.now()
     for r in rows:
@@ -4486,7 +4486,7 @@ def set_alert_config(body: dict, db: Session = Depends(get_db), _=Depends(get_cu
 
 
 @router.post("/alerts/reset")
-def reset_alerts(body: dict, db: Session = Depends(get_db), _=Depends(require_admin)):
+def reset_alerts(body: dict, db: Session = Depends(get_db), _=Depends(require_permission("config:reset_alert"))):
     """重置预警：按指定日期清除预警数据后重新扫描生成新预警"""
     date_val = (body.get("date") or "").strip()
     scope = (body.get("scope") or "stop").strip()

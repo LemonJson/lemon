@@ -93,7 +93,8 @@ const KINDS = {
     title: '小组监控', endpoint: '/api/groups', perm: 'group',
     filterCols: [{ k: 'group_name', l: '小组名' }, { k: 'status', l: '状态' }, { k: 'warn', l: '预警' }],
     cols: [
-      { k: 'group_name', l: '小组名' }, { k: 'limit', l: '出数上限', num: true },
+      { k: 'customer_name', l: '一级代理' }, { k: 'group_name', l: '小组名' },
+      { k: 'limit', l: '出数上限', num: true },
       { k: 'daily_total', l: '累计日活数', num: true }, { k: 'daily_avg', l: '日均日活', num: true },
       { k: 'order_count', l: '关联订单数', num: true }, { k: 'status', l: '状态' },
     ], group: true,
@@ -440,13 +441,22 @@ export default function SimpleList({ kind }) {
     }
   }
   function openGroupCreate() {
-    api.get('/api/groups/options').then(r => { setGroupOptions(r.data || []); setGroupModal({ id: null, group_name: '', limit: 0 }) }).catch(e => showError(e.message))
+    api.get('/api/groups/options').then(r => {
+      const opts = r.data || []
+      setGroupOptions(opts)
+      setGroupModal({ id: null, customer_id: '', group_name: '', limit: 0 })
+    }).catch(e => showError(e.message))
   }
   function openGroupEdit(r) {
     setGroupModal({ id: r.id, group_name: r.group_name, limit: r.limit })
   }
   async function saveGroup() {
-    const body = { group_name: (groupModal.group_name || '').trim(), limit: Number(groupModal.limit) || 0 }
+    const group_name = (groupModal.group_name || '').trim()
+    if (!group_name) { showError('请选择小组名'); return }
+    if (!groupModal.id && !groupOptions.some(g => g.group_name === group_name)) {
+      showError('小组名不存在，请从下拉中选择'); return
+    }
+    const body = { group_name, limit: Number(groupModal.limit) || 0 }
     try {
       await withBusy(async () => {
         if (groupModal.id) await api.put(`/api/groups/${groupModal.id}`, body)
@@ -681,6 +691,7 @@ export default function SimpleList({ kind }) {
       if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`
       return `${(v / 1024 / 1024).toFixed(1)} MB`
     }
+    if (kind === 'groups' && c.k === 'customer_name') return (r.customer_code && r.customer_name) ? `${r.customer_code} ${r.customer_name}` : (r.customer_name || '—')
     if (kind === 'groups' && c.k === 'status') return <Badge value={v} />
     if (['status'].includes(c.k)) return <Badge value={v === 1 ? '启用' : v === 0 ? '停用' : v} />
     if (['level', 'gender', 'deposit_status', 'wash_status', 'type'].includes(c.k)) return <Badge value={v} />
@@ -1173,12 +1184,27 @@ export default function SimpleList({ kind }) {
       {groupModal && (
         <Modal title={groupModal.id ? '编辑小组配置' : '新增小组配置'} onClose={() => setGroupModal(null)}>
           <div className="row">
-            <div className="field"><label>小组名</label>
+            {!groupModal.id && (
+              <div className="field"><label className="required">一级代理</label>
+                <select value={groupModal.customer_id || ''} onChange={e => setGroupModal({ ...groupModal, customer_id: Number(e.target.value) || '', group_name: '' })}>
+                  <option value="">请选择代理</option>
+                  {[...new Map(groupOptions.map(g => [g.customer_id, g])).values()].map(a => (
+                    <option key={a.customer_id} value={a.customer_id}>{a.customer_code} {a.customer_name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="field" style={{ flex: 2 }}><label className="required">小组名</label>
               {groupModal.id
                 ? <ClearableInput value={groupModal.group_name} disabled />
-                : <select value={groupModal.group_name} onChange={e => setGroupModal({ ...groupModal, group_name: e.target.value })}><option value="">请选择小组名</option>{groupOptions.map(g => <option key={g} value={g}>{g}</option>)}</select>}
+                : <>
+                    <ClearableInput list="group-name-list" value={groupModal.group_name} onChange={e => setGroupModal({ ...groupModal, group_name: e.target.value })} placeholder="输入检索小组名" />
+                    <datalist id="group-name-list">
+                      {groupOptions.filter(g => !groupModal.customer_id || g.customer_id === groupModal.customer_id).map(g => <option key={g.group_name} value={g.group_name} />)}
+                    </datalist>
+                  </>}
             </div>
-            <div className="field"><label>出数上限</label><input type="number" min="0" value={groupModal.limit} onChange={e => setGroupModal({ ...groupModal, limit: e.target.value })} /></div>
+            <div className="field" style={{ flex: 1 }}><label>出数上限</label><input type="number" min="0" value={groupModal.limit} onChange={e => setGroupModal({ ...groupModal, limit: e.target.value })} /></div>
           </div>
           <div className="foot"><button className="btn" onClick={() => setGroupModal(null)}>取消</button><button className="btn primary" onClick={saveGroup}>保存</button></div>
         </Modal>

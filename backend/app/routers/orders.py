@@ -12,7 +12,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, aliased
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, require_admin, require_permission
 from ..models import Order, OrderUrl, Channel, Customer, Alert, OrderTemplate, Template, TidabiaoHistory, OperationLog, Operator, Platform, Category, SourceFile, SysConfig
 from ..schemas import OrderBody, StopBody, BatchStopBody, OrderDistConfigBody, GenerateBody, BatchGroupBody, ReopenBody
 from ..pagination import paginate, ok_page
@@ -779,7 +779,7 @@ def save_dist_config(oid: int, body: OrderDistConfigBody, db: Session = Depends(
 
 
 @router.delete("/{oid}")
-def delete_order(oid: int, db: Session = Depends(get_db), _=Depends(require_admin)):
+def delete_order(oid: int, db: Session = Depends(get_db), _=Depends(require_permission("order:delete"))):
     o = db.query(Order).filter(Order.id == oid, Order.deleted_at.is_(None)).first()
     if not o:
         raise HTTPException(status_code=404, detail="订单不存在")
@@ -857,8 +857,8 @@ def batch_stop(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(
 
 
 @router.post("/batch-reopen")
-def batch_reopen(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(require_admin)):
-    """批量复提：已停订单改回未提，并可更新更新日期/开始日期/截止日期（仅管理员）"""
+def batch_reopen(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(require_permission("order:batch_reopen"))):
+    """批量复提：已停订单改回未提，并可更新更新日期/开始日期/截止日期（按角色权限控制）"""
     if body.order_date:
         if body.order_date > date.today():
             raise HTTPException(status_code=400, detail="更新日期不能是未来日期，请修改更新日期")
@@ -910,7 +910,7 @@ def reopen_order(oid: int, body: ReopenBody, db: Session = Depends(get_db), user
 
 
 @router.post("/batch-delete")
-def batch_delete(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(require_admin)):
+def batch_delete(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(require_permission("order:batch_delete"))):
     rows = db.query(Order).filter(Order.id.in_(body.ids), Order.deleted_at.is_(None)).all()
     ids = [o.id for o in rows]
     order_nos = [o.order_no for o in rows]

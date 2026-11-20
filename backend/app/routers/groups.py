@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import GroupConfig, Order, DailyData, Alert
+from ..models import GroupConfig, Order, DailyData, Alert, Customer
 from ..pagination import paginate, ok_page
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
@@ -19,7 +19,7 @@ def _user_label(user):
 
 
 def _group_metrics(db, names):
-    """批量计算各小组的累计日活数/日均日活量/关联订单（内存聚合，避免逐行 N+1）"""
+    """批量计算各小组的累计日活数/日均日活量/关联订单/代理（内存聚合，避免逐行 N+1）"""
     total_by_g = dict(db.query(DailyData.group_name, func.count(DailyData.id)).filter(
         DailyData.group_name.isnot(None), DailyData.group_name != "").group_by(DailyData.group_name).all())
     days_by_g = dict(db.query(DailyData.group_name, func.count(func.distinct(DailyData.biz_date))).filter(
@@ -28,6 +28,8 @@ def _group_metrics(db, names):
     for o in db.query(Order).filter(Order.group_name.isnot(None), Order.group_name != "",
                                     Order.deleted_at.is_(None)).all():
         orders_by_g[o.group_name].append(o)
+    cust_ids = {o.customer_id for orders in orders_by_g.values() for o in orders if o.customer_id}
+    customers = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(cust_ids)).all()} if cust_ids else {}
     result = {}
     for g in names:
         total = int(total_by_g.get(g, 0) or 0)
@@ -35,7 +37,14 @@ def _group_metrics(db, names):
         avg = round(total / days, 1) if days else 0
         orders = orders_by_g.get(g, [])
         status = "已停" if all(o.status == "已停" for o in orders) else "在执"
-        result[g] = {"total": total, "avg": avg, "order_count": len(orders), "status": status}
+        cust = None
+        for o in orders:
+            if o.customer_id:
+                cust = customers.get(o.customer_id)
+                if cust:
+                    break
+        result[g] = {"total": total, "avg": avg, "order_count": len(orders), "status": status,
+                     "customer_code": cust.code if cust else "", "customer_name": cust.name if cust else ""}
     return result
 
 
@@ -50,7 +59,8 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
     metrics = _group_metrics(db, [r.group_name for r in all_rows])
     data = []
     for r in all_rows:
-        m = metrics.get(r.group_name, {"total": 0, "avg": 0, "order_count": 0, "status": "在执"})
+        m = metrics.get(r.group_name, {"total": 0, "avg": 0, "order_count": 0, "status": "在执",
+                                       "customer_code": "", "customer_name": ""})
         limit = int(r.limit or 0)
         warn_flag = limit > 0 and (limit - m["total"]) <= m["avg"]
         if status and m["status"] != status:
@@ -63,6 +73,7 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
             "id": r.id, "group_name": r.group_name, "limit": limit,
             "daily_total": m["total"], "daily_avg": m["avg"],
             "order_count": m["order_count"], "status": m["status"], "warn": bool(warn_flag),
+            "customer_code": m["customer_code"], "customer_name": m["customer_name"],
         })
     total = len(data)
     start = (page - 1) * per_page
@@ -71,11 +82,23 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
 
 @router.get("/options")
 def group_options(db: Session = Depends(get_db), _=Depends(get_current_user)):
-    """在执订单的小组名去重列表（新增配置下拉用）"""
-    names = db.query(Order.group_name).filter(
+    """在执订单的「小组名 + 一级代理」关联列表（新增配置下拉联动用）"""
+    rows = db.query(Order.group_name, Order.customer_id).filter(
         Order.status == "在执", Order.deleted_at.is_(None),
         Order.group_name.isnot(None), Order.group_name != "").distinct().all()
-    return {"code": 0, "data": sorted([r[0] for r in names]), "msg": "ok"}
+    cids = {r[1] for r in rows if r[1]}
+    customers = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(cids)).all()} if cids else {}
+    data = []
+    for g, cid in rows:
+        c = customers.get(cid)
+        data.append({
+            "group_name": g,
+            "customer_id": cid,
+            "customer_code": c.code if c else "",
+            "customer_name": c.name if c else "",
+        })
+    data.sort(key=lambda x: (x["customer_code"] or "", x["group_name"]))
+    return {"code": 0, "data": data, "msg": "ok"}
 
 
 @router.post("")
