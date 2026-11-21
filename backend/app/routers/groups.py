@@ -1,6 +1,6 @@
 """小组名出数上限配置路由"""
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import GroupConfig, Order, DailyData, Alert, Customer
+from ..models import GroupConfig, Order, DailyData, Alert, Customer, SysConfig
 from ..pagination import paginate, ok_page
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
@@ -16,6 +16,52 @@ router = APIRouter(prefix="/api/groups", tags=["groups"])
 
 def _user_label(user):
     return (user.nickname or user.username) if user else ""
+
+
+def _non_bill_dates(db):
+    """读取手动设定的非提单日（逗号分隔的日期列表）"""
+    cfg = db.query(SysConfig).filter(SysConfig.key == "non_bill_dates").first()
+    if not cfg or not cfg.value:
+        return set()
+    dates = set()
+    for s in (cfg.value or "").replace("，", ",").split(","):
+        s = s.strip()
+        if not s:
+            continue
+        try:
+            dates.add(datetime.strptime(s, "%Y-%m-%d").date())
+        except ValueError:
+            pass
+    return dates
+
+
+def _is_bill_date(d, non_bill):
+    """判断是否提单日：非周五(4)、非周六(5)、不在手动设定的非提单日"""
+    if d.weekday() in (4, 5):
+        return False
+    if d in non_bill:
+        return False
+    return True
+
+
+def _next_bill_date(db, start):
+    """从 start（含）开始，找下一个提单日"""
+    non_bill = _non_bill_dates(db)
+    d = start
+    while not _is_bill_date(d, non_bill):
+        d += timedelta(days=1)
+    return d
+
+
+def _should_warn(db, limit, total, avg):
+    """预警：预测到下一个提单日前，累计日活会达到 limit - 每日出数量，则预警"""
+    if limit <= 0 or avg <= 0:
+        return False
+    today = date.today()
+    next_bill = _next_bill_date(db, today)
+    days = (next_bill - today).days
+    # 剩余可出数 <= (到下一个提单日的天数 + 1) × 日均，则预警
+    return (limit - total) <= (days + 1) * avg
 
 
 def _group_metrics(db, names):
@@ -62,7 +108,7 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
         m = metrics.get(r.group_name, {"total": 0, "avg": 0, "order_count": 0, "status": "在执",
                                        "customer_code": "", "customer_name": ""})
         limit = int(r.limit or 0)
-        warn_flag = limit > 0 and (limit - m["total"]) <= m["avg"]
+        warn_flag = _should_warn(db, limit, m["total"], m["avg"])
         if status and m["status"] != status:
             continue
         if warn == "是" and not warn_flag:

@@ -607,6 +607,7 @@ CONFIG_ITEMS = [
     {"key": "business_cutoff_time", "label": "营业截止时间", "type": "time", "default": "06:00"},
     {"key": "trash_retention_days", "label": "垃圾箱数据保留天数", "type": "number", "default": "30"},
     {"key": "trash_cleanup_time", "label": "垃圾箱自动清理时间", "type": "time", "default": "03:00"},
+    {"key": "non_bill_dates", "label": "非提单日（逗号分隔日期，如 2026-10-01,2026-10-02）", "type": "text", "default": ""},
 ]
 
 
