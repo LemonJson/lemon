@@ -796,8 +796,6 @@ def stop_order(oid: int, body: StopBody, db: Session = Depends(get_db), user=Dep
     o.stop_prev_order_date = o.order_date  # 保存停单前的更新日期
     o.stop_prev_end_date = o.end_date      # 保存停单前的截止日期
     if body.order_date:
-        if body.order_date > date.today():
-            raise HTTPException(status_code=400, detail="更新日期不能是未来日期，请修改更新日期")
         o.order_date = body.order_date
     o.end_date = o.order_date
     o.status = "待停"
@@ -834,9 +832,6 @@ def cancel_stop(oid: int, db: Session = Depends(get_db), user=Depends(get_curren
 
 @router.post("/batch-stop")
 def batch_stop(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    if body.order_date:
-        if body.order_date > date.today():
-            raise HTTPException(status_code=400, detail="更新日期不能是未来日期，请修改更新日期")
     rows = db.query(Order).filter(Order.id.in_(body.ids), Order.deleted_at.is_(None)).all()
     ids = [o.id for o in rows]
     for o in rows:
@@ -859,9 +854,6 @@ def batch_stop(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(
 @router.post("/batch-reopen")
 def batch_reopen(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(require_permission("order:batch_reopen"))):
     """批量复提：已停订单改回未提，并可更新更新日期/开始日期/截止日期（按角色权限控制）"""
-    if body.order_date:
-        if body.order_date > date.today():
-            raise HTTPException(status_code=400, detail="更新日期不能是未来日期，请修改更新日期")
     rows = db.query(Order).filter(Order.id.in_(body.ids), Order.deleted_at.is_(None)).all()
     order_nos = []
     for o in rows:
@@ -892,8 +884,6 @@ def reopen_order(oid: int, body: ReopenBody, db: Session = Depends(get_db), user
     if o.status != "已停":
         raise HTTPException(status_code=400, detail="仅已停订单可复提")
     if body.order_date:
-        if body.order_date > date.today():
-            raise HTTPException(status_code=400, detail="更新日期不能是未来日期，请修改更新日期")
         o.order_date = body.order_date
     else:
         o.order_date = date.today()

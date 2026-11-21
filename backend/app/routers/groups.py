@@ -169,8 +169,6 @@ def stop_group(gid: int, body: dict, db: Session = Depends(get_db), user=Depends
             od = datetime.strptime(order_date, "%Y-%m-%d").date()
         except (TypeError, ValueError):
             raise HTTPException(status_code=422, detail="更新日期格式错误")
-        if od > date.today():
-            raise HTTPException(status_code=400, detail="更新日期不能是未来日期，请修改更新日期")
     reason = (body.get("reason") or "").strip()
     rows = db.query(Order).filter(Order.group_name == g.group_name,
                                   Order.status == "在执",
