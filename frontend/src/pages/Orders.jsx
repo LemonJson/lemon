@@ -146,7 +146,6 @@ export default function Orders({ variant = 'orders' }) {
   const importFileRef = useRef(null)
   const [receiptModal, setReceiptModal] = useState(false)
   const [receiptResult, setReceiptResult] = useState(null)
-  const [receiptParty, setReceiptParty] = useState('牛')
   const receiptFileRef = useRef(null)
   const [selected, setSelected] = useState([])
   const [groupModal, setGroupModal] = useState(false)
@@ -493,7 +492,6 @@ export default function Orders({ variant = 'orders' }) {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      fd.append('party', receiptParty)
       const data = await uploadFile('/api/orders/import-receipt', fd, p => setBusyProgress(p))
       setBusyMsg('正在处理回执数据，请稍候…'); setBusyProgress(100)
       setReceiptResult(data.data)
@@ -985,24 +983,18 @@ export default function Orders({ variant = 'orders' }) {
       )}
 
       {receiptModal && (
-        <Modal title="导入回执（按任务名更新工单号）" onClose={() => setReceiptModal(false)} wide>
-          <div className="note">回执文件需包含「任务名」「任务ID/工单号」「运营商」「渠道（类型）」列，将按 回执来源 + 任务名 + 运营商 + 渠道 且工单号为空 匹配订单并更新工单号；未匹配或多匹配会提示且不更新。</div>
-          <div className="row">
-            <div className="field"><label>回执来源</label>
-              <select value={receiptParty} onChange={e => setReceiptParty(e.target.value)}>
-                {upstreams.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-              </select></div>
-          </div>
+        <Modal title="导入回执（按订单编号更新工单号）" onClose={() => setReceiptModal(false)} wide>
+          <div className="note">回执文件需包含「任务名/订单编号」「任务ID/工单号」列，将按 订单编号 且工单号为空 匹配订单并回填工单号；未匹配或多匹配会提示且不更新。</div>
           <input type="file" accept=".xlsx,.xls" ref={receiptFileRef} />
           {receiptResult && (
             <div className="table-scroll" style={{ maxHeight: 420 }}>
               <div className="note" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
                 更新 {receiptResult.updated} 条
                 <table style={{ marginTop: 6, width: '100%' }}>
-                  <thead><tr><th>回执来源</th><th>工单号</th><th>任务名</th><th>运营商</th><th>类型</th></tr></thead>
+                  <thead><tr><th>工单号</th><th>订单编号</th></tr></thead>
                   <tbody>
                     {(receiptResult.updated_list || []).map((e, i) => (
-                      <tr key={i}><td>{e.party}</td><td>{e.task_id}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.task_name}</td><td>{e.operator}</td><td>{e.channel}</td></tr>
+                      <tr key={i}><td>{e.task_id}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.order_no}</td></tr>
                     ))}
                   </tbody>
                 </table>
@@ -1011,10 +1003,10 @@ export default function Orders({ variant = 'orders' }) {
                 <div className="note" style={{ marginTop: 8, background: '#fef2f2', border: '1px solid #fecaca' }}>
                   失败 {receiptResult.errors.length} 条
                   <table style={{ marginTop: 6, width: '100%' }}>
-                    <thead><tr><th>工单号</th><th>任务名</th><th>原因</th></tr></thead>
+                    <thead><tr><th>工单号</th><th>订单编号</th><th>原因</th></tr></thead>
                     <tbody>
                       {receiptResult.errors.map((e, i) => (
-                        <tr key={i}><td>{e.task_id || '—'}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.task_name}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.reason}</td></tr>
+                        <tr key={i}><td>{e.task_id || '—'}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.order_no}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.reason}</td></tr>
                       ))}
                     </tbody>
                   </table>

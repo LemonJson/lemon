@@ -1611,7 +1611,7 @@ async def import_orders(file: UploadFile = File(...), db: Session = Depends(get_
 @router.post("/import-receipt")
 async def import_receipt(file: UploadFile = File(...), party: str = Form("牛"),
                          db: Session = Depends(get_db), _=Depends(get_current_user)):
-    """导入回执：按甲方+任务名匹配订单，更新工单号；未匹配或多匹配的提示错误"""
+    """导入回执：按订单编号匹配订单，回填工单号；未匹配或多匹配的提示错误"""
     fn = file.filename or ""
     content = await file.read()
     if not fn.lower().endswith((".xlsx", ".xls")):
@@ -1636,25 +1636,12 @@ async def import_receipt(file: UploadFile = File(...), party: str = Form("牛"),
                     return i
         return -1
 
-    name_col = _find("任务名")
+    name_col = _find("任务名", "订单编号")
     id_col = _find("任务ID", "工单号", "id")
-    op_col = _find("运营商")
-    ch_col = _find("渠道", "类型")
-    url_col = _find("url", "URL", "拓展码")
     if name_col < 0:
-        raise HTTPException(status_code=422, detail="回执文件缺少「任务名」列")
+        raise HTTPException(status_code=422, detail="回执文件缺少「任务名/订单编号」列")
     if id_col < 0:
         raise HTTPException(status_code=422, detail="回执文件缺少「任务ID/工单号/id」列")
-    if op_col < 0:
-        raise HTTPException(status_code=422, detail="回执文件缺少「运营商」列")
-    if ch_col < 0:
-        raise HTTPException(status_code=422, detail="回执文件缺少「渠道/类型」列")
-
-    # 甲方（来自前端选择，兜底默认「牛」）
-    party = (party or "牛").strip()
-    up = db.query(Customer).filter(Customer.ctype == "upstream", Customer.status == 1,
-                                   or_(Customer.name == party, Customer.code == party)).first()
-    up_id = up.id if up else None
 
     updated = 0
     updated_list = []
@@ -1662,67 +1649,36 @@ async def import_receipt(file: UploadFile = File(...), party: str = Form("牛"),
     for r in rows:
         if r is None:
             continue
-        task_name = str(r[name_col]).strip() if name_col < len(r) and r[name_col] is not None else ""
+        order_no = str(r[name_col]).strip() if name_col < len(r) and r[name_col] is not None else ""
         new_task_id = str(r[id_col]).strip() if id_col < len(r) and r[id_col] is not None else ""
-        operator_val = str(r[op_col]).strip() if op_col < len(r) and r[op_col] is not None else ""
-        channel_val = str(r[ch_col]).strip() if ch_col < len(r) and r[ch_col] is not None else ""
-        url_val = str(r[url_col]).strip() if url_col >= 0 and url_col < len(r) and r[url_col] is not None else ""
         # 工单号已在订单中存在：跳过该回执数据（不匹配、不校验、不报错）
         if new_task_id and db.query(Order).filter(Order.task_id == new_task_id, Order.deleted_at.is_(None)).first():
             continue
-        if not task_name:
-            continue
-        op = db.query(Operator).filter(Operator.name == operator_val).first() if operator_val else None
-        ch = db.query(Channel).filter(Channel.name == channel_val).first() if channel_val else None
-        if operator_val and not op:
-            errors.append({"task_id": new_task_id, "task_name": task_name, "reason": f"运营商「{operator_val}」在系统中不存在"})
-            continue
-        if channel_val and not ch:
-            errors.append({"task_id": new_task_id, "task_name": task_name, "reason": f"渠道「{channel_val}」在系统中不存在"})
+        if not order_no:
             continue
         base = db.query(Order).filter(
-            or_(Order.task_name == task_name, Order.order_no == task_name),
-            Order.upstream_id == up_id,
-            Order.operator_id == (op.id if op else None),
-            Order.channel_id == (ch.id if ch else None),
+            Order.order_no == order_no,
             Order.deleted_at.is_(None),
         ).all()
-        # 有 url 时：按 URL 集合精确比对（回执与订单 url 都按 换行/竖线 拆成集合、去末尾斜杠/协议前缀，用集合去重比对）
-        if url_val:
-            receipt_urls = {p for p in (_norm_url_part(u) for u in re.split(r"[|\n\r｜]", url_val)) if p}
-            matched = []
-            for o in base:
-                o_urls = set()
-                for u in db.query(OrderUrl).filter(OrderUrl.order_id == o.id).all():
-                    for part in re.split(r"[|\n\r｜]", u.url or ""):
-                        p = _norm_url_part(part)
-                        if p:
-                            o_urls.add(p)
-                if o_urls == receipt_urls:
-                    matched.append(o)
-            base = matched
         if not base:
-            errors.append({"task_id": new_task_id, "task_name": task_name, "reason": "未找到匹配订单（甲方+任务名/订单编号+运营商+渠道+url）"})
+            errors.append({"task_id": new_task_id, "order_no": order_no, "reason": "未找到匹配订单（订单编号）"})
             continue
         # 只有工单号为空的才需要更新；匹配到多个时若仅一个工单号为空则更新该条
         pending = [o for o in base if not o.task_id]
         if not pending:
             continue
         if len(pending) > 1:
-            errors.append({"task_id": new_task_id, "task_name": task_name, "reason": f"匹配到 {len(pending)} 个工单号为空的订单"})
+            errors.append({"task_id": new_task_id, "order_no": order_no, "reason": f"匹配到 {len(pending)} 个工单号为空的订单"})
             continue
         if not new_task_id:
-            errors.append({"task_id": new_task_id, "task_name": task_name, "reason": "工单号为空"})
+            errors.append({"task_id": new_task_id, "order_no": order_no, "reason": "工单号为空"})
             continue
         pending[0].task_id = new_task_id
         pending[0].updated_at = datetime.now()
         updated += 1
         updated_list.append({
-            "party": party or "",
             "task_id": new_task_id,
-            "task_name": task_name,
-            "operator": operator_val,
-            "channel": channel_val,
+            "order_no": order_no,
         })
     db.commit()
     return {"code": 0, "data": {"updated": updated, "updated_list": updated_list, "errors": errors},

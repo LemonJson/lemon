@@ -4,7 +4,7 @@ import { Modal, useToast, useConfirm, Loading } from '../components/ui'
 
 const STEP_KEYS = ['receipt', 'daily', 'wash', 'washimport', 'dist', 'bill']
 const STEPS = {
-  receipt: { label: '导入回执', desc: '上传回执文件，按回执来源+任务名匹配订单更新工单号' },
+  receipt: { label: '导入回执', desc: '上传回执文件，按订单编号匹配订单回填工单号' },
   daily: { label: '导入日活', desc: '上传日活数据文件（zip/excel/csv）' },
   wash: { label: '导出洗名', desc: '按数据日期导出洗名文件' },
   washimport: { label: '导入洗名', desc: '导入洗名文件（手机号→姓名）' },
@@ -24,7 +24,6 @@ export default function Workflow() {
   const [bizDate, setBizDate] = useState('')
   const [upstreams, setUpstreams] = useState([])
   const [downstreams, setDownstreams] = useState([])
-  const [receiptParty, setReceiptParty] = useState('牛')
   const [receiptFile, setReceiptFile] = useState(null)
   const [dailyFiles, setDailyFiles] = useState([])
   const [washImportFile, setWashImportFile] = useState(null)
@@ -60,7 +59,7 @@ export default function Workflow() {
     setBusy(true); setBusyMsg('正在上传回执文件…'); setBusyProgress(0)
     try {
       const fd = new FormData()
-      fd.append('file', receiptFile); fd.append('party', receiptParty)
+      fd.append('file', receiptFile)
       const data = await uploadFile('/api/orders/import-receipt', fd, p => setBusyProgress(p))
       setBusyMsg('正在处理回执数据，请稍候…'); setBusyProgress(100)
       setReceiptResult(data.data)
@@ -204,10 +203,6 @@ export default function Workflow() {
   function stepBody(key) {
     if (key === 'receipt') return (
       <div className="wf-action">
-        <div className="field wf-field"><label>回执来源</label>
-          <select value={receiptParty} onChange={e => setReceiptParty(e.target.value)}>
-            {upstreams.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-          </select></div>
         <div className="field wf-field"><label>回执文件</label>
           <div className="wf-file">
             <input type="file" id="wf-receipt-file" className="wf-file-input" accept=".xlsx,.xls" onChange={e => setReceiptFile(e.target.files?.[0] || null)} />
@@ -307,10 +302,10 @@ export default function Workflow() {
             <div className="note" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
               更新 {receiptResult.updated} 条
               <table style={{ marginTop: 6, width: '100%' }}>
-                <thead><tr><th>回执来源</th><th>工单号</th><th>任务名</th><th>运营商</th><th>类型</th></tr></thead>
+                <thead><tr><th>工单号</th><th>订单编号</th></tr></thead>
                 <tbody>
                   {(receiptResult.updated_list || []).map((e, i) => (
-                    <tr key={i}><td>{e.party}</td><td>{e.task_id}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.task_name}</td><td>{e.operator}</td><td>{e.channel}</td></tr>
+                    <tr key={i}><td>{e.task_id}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.order_no}</td></tr>
                   ))}
                 </tbody>
               </table>
@@ -319,10 +314,10 @@ export default function Workflow() {
               <div className="note" style={{ marginTop: 8, background: '#fef2f2', border: '1px solid #fecaca' }}>
                 失败 {receiptResult.errors.length} 条
                 <table style={{ marginTop: 6, width: '100%' }}>
-                  <thead><tr><th>工单号</th><th>任务名</th><th>原因</th></tr></thead>
+                  <thead><tr><th>工单号</th><th>订单编号</th><th>原因</th></tr></thead>
                   <tbody>
                     {receiptResult.errors.map((e, i) => (
-                      <tr key={i}><td>{e.task_id || '—'}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.task_name}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.reason}</td></tr>
+                      <tr key={i}><td>{e.task_id || '—'}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.order_no}</td><td style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{e.reason}</td></tr>
                     ))}
                   </tbody>
                 </table>
