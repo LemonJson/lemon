@@ -128,9 +128,9 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
 
 @router.get("/options")
 def group_options(db: Session = Depends(get_db), _=Depends(get_current_user)):
-    """在执订单的「小组名 + 一级代理」关联列表（新增配置下拉联动用）"""
+    """未提/在执订单的「小组名 + 一级代理」关联列表（新增配置下拉联动用）"""
     rows = db.query(Order.group_name, Order.customer_id).filter(
-        Order.status == "在执", Order.deleted_at.is_(None),
+        Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None),
         Order.group_name.isnot(None), Order.group_name != "").distinct().all()
     cids = {r[1] for r in rows if r[1]}
     customers = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(cids)).all()} if cids else {}
