@@ -140,7 +140,7 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
             "daily_total": m["total"], "daily_avg": m["avg"],
             "order_count": m["order_count"], "status": m["status"], "warn": bool(warn_flag),
             "customer_code": m["customer_code"], "customer_name": m["customer_name"],
-            "base_total": base_total,
+            "base_total": base_total, "total_limit": limit + base_total,
         })
     total = len(data)
     start = (page - 1) * per_page

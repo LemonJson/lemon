@@ -95,8 +95,9 @@ const KINDS = {
     cols: [
       { k: 'status', l: '状态' },
       { k: 'customer_name', l: '一级代理' }, { k: 'group_name', l: '小组名' },
-      { k: 'limit', l: '计划出数', num: true },
+      { k: 'total_limit', l: '出数上限', num: true },
       { k: 'daily_total', l: '累计日活数', num: true }, { k: 'daily_avg', l: '日均日活', num: true },
+      { k: 'remain', l: '剩余可出', num: true },
       { k: 'order_count', l: '关联订单数', num: true },
     ], group: true,
   },
@@ -694,6 +695,10 @@ export default function SimpleList({ kind }) {
     }
     if (kind === 'groups' && c.k === 'customer_name') return (r.customer_code && r.customer_name) ? `${r.customer_code} ${r.customer_name}` : (r.customer_name || '—')
     if (kind === 'groups' && c.k === 'status') return <Badge value={v} />
+    if (kind === 'groups' && c.k === 'remain') {
+      const remain = (r.total_limit ?? 0) - (r.daily_total ?? 0)
+      return <span style={remain < 0 ? { color: '#dc2626' } : undefined}>{remain.toLocaleString()}</span>
+    }
     if (['status'].includes(c.k)) return <Badge value={v === 1 ? '启用' : v === 0 ? '停用' : v} />
     if (['level', 'gender', 'deposit_status', 'wash_status', 'type'].includes(c.k)) return <Badge value={v} />
     if (c.num && typeof v === 'number') return v.toLocaleString()
