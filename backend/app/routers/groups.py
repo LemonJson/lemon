@@ -162,6 +162,10 @@ def create_group(body: dict, db: Session = Depends(get_db), _=Depends(get_curren
         raise HTTPException(status_code=422, detail="出数上限格式错误")
     if limit < 0:
         raise HTTPException(status_code=422, detail="出数上限不能为负数")
+    daily_total = db.query(func.count(DailyData.id)).filter(
+        DailyData.group_name == group_name).scalar() or 0
+    if limit <= daily_total:
+        raise HTTPException(status_code=422, detail=f"出数上限需大于已出日活数（当前已出 {daily_total}）")
     if db.query(GroupConfig).filter(GroupConfig.group_name == group_name).first():
         raise HTTPException(status_code=409, detail="该小组名已配置")
     g = GroupConfig(group_name=group_name, limit=limit)
@@ -190,6 +194,10 @@ def update_group(gid: int, body: dict, db: Session = Depends(get_db), _=Depends(
             raise HTTPException(status_code=422, detail="出数上限格式错误")
         if limit < 0:
             raise HTTPException(status_code=422, detail="出数上限不能为负数")
+        daily_total = db.query(func.count(DailyData.id)).filter(
+            DailyData.group_name == g.group_name).scalar() or 0
+        if limit <= daily_total:
+            raise HTTPException(status_code=422, detail=f"出数上限需大于已出日活数（当前已出 {daily_total}）")
         g.limit = limit
     db.commit()
     return {"code": 0, "data": None, "msg": "已保存"}

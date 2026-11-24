@@ -457,7 +457,14 @@ export default function SimpleList({ kind }) {
     if (!groupModal.id && !groupOptions.some(g => g.group_name === group_name)) {
       showError('小组名不存在，请从下拉中选择'); return
     }
-    const body = { group_name, limit: Number(groupModal.limit) || 0 }
+    const daily_total = groupModal.id
+      ? (groupModal.daily_total ?? 0)
+      : (groupOptions.find(g => g.group_name === group_name)?.daily_total ?? 0)
+    const limitNum = Number(groupModal.limit) || 0
+    if (limitNum <= daily_total) {
+      showError(`出数上限需大于已出日活数（当前已出 ${daily_total}）`); return
+    }
+    const body = { group_name, limit: limitNum }
     try {
       await withBusy(async () => {
         if (groupModal.id) await api.put(`/api/groups/${groupModal.id}`, body)
