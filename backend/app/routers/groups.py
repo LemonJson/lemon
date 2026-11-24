@@ -134,6 +134,8 @@ def group_options(db: Session = Depends(get_db), _=Depends(get_current_user)):
         Order.group_name.isnot(None), Order.group_name != "").distinct().all()
     cids = {r[1] for r in rows if r[1]}
     customers = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(cids)).all()} if cids else {}
+    total_by_g = dict(db.query(DailyData.group_name, func.count(DailyData.id)).filter(
+        DailyData.group_name.isnot(None), DailyData.group_name != "").group_by(DailyData.group_name).all())
     data = []
     for g, cid in rows:
         c = customers.get(cid)
@@ -142,6 +144,7 @@ def group_options(db: Session = Depends(get_db), _=Depends(get_current_user)):
             "customer_id": cid,
             "customer_code": c.code if c else "",
             "customer_name": c.name if c else "",
+            "daily_total": int(total_by_g.get(g, 0) or 0),
         })
     data.sort(key=lambda x: (x["customer_code"] or "", x["group_name"]))
     return {"code": 0, "data": data, "msg": "ok"}

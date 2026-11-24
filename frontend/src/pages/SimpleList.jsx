@@ -449,7 +449,7 @@ export default function SimpleList({ kind }) {
     }).catch(e => showError(e.message))
   }
   function openGroupEdit(r) {
-    setGroupModal({ id: r.id, group_name: r.group_name, limit: r.limit })
+    setGroupModal({ id: r.id, group_name: r.group_name, limit: r.limit, daily_total: r.daily_total })
   }
   async function saveGroup() {
     const group_name = (groupModal.group_name || '').trim()
@@ -1204,6 +1204,9 @@ export default function SimpleList({ kind }) {
                       {groupOptions.filter(g => !groupModal.customer_id || g.customer_id === groupModal.customer_id).map(g => <option key={g.group_name} value={g.group_name} />)}
                     </datalist>
                   </>}
+              {groupModal.id
+                ? <div className="note">已出日活数：{groupModal.daily_total ?? 0}</div>
+                : (() => { const g = groupOptions.find(x => x.group_name === groupModal.group_name); return g ? <div className="note">已出日活数：{g.daily_total}</div> : null })()}
             </div>
             <div className="field" style={{ flex: 1 }}><label>出数上限</label><input type="number" min="0" value={groupModal.limit} onChange={e => setGroupModal({ ...groupModal, limit: e.target.value })} /></div>
           </div>
