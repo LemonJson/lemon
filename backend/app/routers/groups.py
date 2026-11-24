@@ -64,14 +64,33 @@ def _should_warn(db, limit, total, avg, base_total=0):
     return (limit + base_total - total) <= (days + 1) * avg
 
 
+def _active_daily_totals(db):
+    """各小组名「当前有效订单（未提/在执）」的日活数与去重天数（join 订单过滤，去掉已停订单历史出数）"""
+    rows = db.query(DailyData.group_name, func.count(DailyData.id),
+                    func.count(func.distinct(DailyData.biz_date))) \
+        .join(Order, DailyData.task_id == Order.task_id) \
+        .filter(DailyData.group_name.isnot(None), DailyData.group_name != "",
+                Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None)) \
+        .group_by(DailyData.group_name).all()
+    total_by_g = {g: int(t or 0) for g, t, _ in rows}
+    days_by_g = {g: int(d or 0) for g, _, d in rows}
+    return total_by_g, days_by_g
+
+
+def _active_daily_total(db, group_name):
+    """某小组名「当前有效订单（未提/在执）」的日活数"""
+    return db.query(func.count(DailyData.id)) \
+        .join(Order, DailyData.task_id == Order.task_id) \
+        .filter(DailyData.group_name == group_name,
+                Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None)).scalar() or 0
+
+
 def _group_metrics(db, names):
     """批量计算各小组的累计日活数/日均日活量/关联订单/代理（内存聚合，避免逐行 N+1）"""
-    total_by_g = dict(db.query(DailyData.group_name, func.count(DailyData.id)).filter(
-        DailyData.group_name.isnot(None), DailyData.group_name != "").group_by(DailyData.group_name).all())
-    days_by_g = dict(db.query(DailyData.group_name, func.count(func.distinct(DailyData.biz_date))).filter(
-        DailyData.group_name.isnot(None), DailyData.group_name != "").group_by(DailyData.group_name).all())
+    total_by_g, days_by_g = _active_daily_totals(db)
     orders_by_g = defaultdict(list)
     for o in db.query(Order).filter(Order.group_name.isnot(None), Order.group_name != "",
+                                    Order.status.in_(("未提", "在执")),
                                     Order.deleted_at.is_(None)).all():
         orders_by_g[o.group_name].append(o)
     cust_ids = {o.customer_id for orders in orders_by_g.values() for o in orders if o.customer_id}
@@ -136,8 +155,7 @@ def group_options(db: Session = Depends(get_db), _=Depends(get_current_user)):
         Order.group_name.isnot(None), Order.group_name != "").distinct().all()
     cids = {r[1] for r in rows if r[1]}
     customers = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(cids)).all()} if cids else {}
-    total_by_g = dict(db.query(DailyData.group_name, func.count(DailyData.id)).filter(
-        DailyData.group_name.isnot(None), DailyData.group_name != "").group_by(DailyData.group_name).all())
+    total_by_g, _ = _active_daily_totals(db)
     data = []
     for g, cid in rows:
         c = customers.get(cid)
@@ -166,8 +184,7 @@ def create_group(body: dict, db: Session = Depends(get_db), _=Depends(get_curren
         raise HTTPException(status_code=422, detail="计划出数不能为负数")
     if db.query(GroupConfig).filter(GroupConfig.group_name == group_name).first():
         raise HTTPException(status_code=409, detail="该小组名已配置")
-    base_total = db.query(func.count(DailyData.id)).filter(
-        DailyData.group_name == group_name).scalar() or 0
+    base_total = _active_daily_total(db, group_name)
     g = GroupConfig(group_name=group_name, limit=limit, base_total=base_total)
     db.add(g)
     db.commit()
@@ -196,8 +213,7 @@ def update_group(gid: int, body: dict, db: Session = Depends(get_db), _=Depends(
             raise HTTPException(status_code=422, detail="计划出数不能为负数")
         g.limit = limit
     if "group_name" in body or "limit" in body:
-        g.base_total = db.query(func.count(DailyData.id)).filter(
-            DailyData.group_name == g.group_name).scalar() or 0
+        g.base_total = _active_daily_total(db, g.group_name)
     db.commit()
     return {"code": 0, "data": None, "msg": "已保存"}
 
