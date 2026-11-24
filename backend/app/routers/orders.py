@@ -8,12 +8,12 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from openpyxl import load_workbook
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from sqlalchemy.orm import Session, aliased
 
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_permission
-from ..models import Order, OrderUrl, Channel, Customer, Alert, OrderTemplate, Template, TidabiaoHistory, OperationLog, Operator, Platform, Category, SourceFile, SysConfig
+from ..models import Order, OrderUrl, Channel, Customer, Alert, OrderTemplate, Template, TidabiaoHistory, OperationLog, Operator, Platform, Category, SourceFile, SysConfig, GroupConfig, DailyData
 from ..schemas import OrderBody, StopBody, BatchStopBody, OrderDistConfigBody, GenerateBody, BatchGroupBody, ReopenBody
 from ..pagination import paginate, ok_page
 from ..utils import fmt_dt, fmt_date, norm_region
@@ -54,6 +54,19 @@ ORDER_HEADER_MAP = {
 MB019_HEADERS = ["开始", "截止", "更新", "状态", "甲方", "订单号", "工单号", "代理", "定价", "平台",
                  "小组", "模版", "加名", "撞库", "渠道", "运营商", "任务名", "url", "数量", "时长",
                  "下限", "上限", "pv", "省份", "排除省份", "地市", "排除地市"]
+
+
+def _refresh_group_base_totals(db, group_names):
+    """停单/复提后，刷新受影响小组的已出日活快照（当前有效订单=未提/在执）"""
+    names = {g for g in group_names if g}
+    if not names:
+        return
+    db.flush()  # 先把内存中订单状态的改动落库，确保下方查询读到最新状态
+    for g in db.query(GroupConfig).filter(GroupConfig.group_name.in_(names)).all():
+        g.base_total = db.query(func.count(DailyData.id)) \
+            .join(Order, DailyData.task_id == Order.task_id) \
+            .filter(DailyData.group_name == g.group_name,
+                    Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None)).scalar() or 0
 
 
 def match_template(db: Session, o) -> int:
@@ -784,6 +797,7 @@ def delete_order(oid: int, db: Session = Depends(get_db), _=Depends(require_perm
     if not o:
         raise HTTPException(status_code=404, detail="订单不存在")
     o.deleted_at = datetime.now()
+    _refresh_group_base_totals(db, [o.group_name])
     db.commit()
     return {"code": 0, "data": None, "msg": "已删除"}
 
@@ -804,6 +818,7 @@ def stop_order(oid: int, body: StopBody, db: Session = Depends(get_db), user=Dep
     o.updated_at = datetime.now()
     o.updated_by = _user_label(user)
     db.query(Alert).filter(Alert.type == "停单提醒", Alert.order_id == o.id, Alert.status == "未处理").delete()
+    _refresh_group_base_totals(db, [o.group_name])
     db.commit()
     return {"code": 0, "data": None, "msg": "已提交停单（状态：待停）"}
 
@@ -826,6 +841,7 @@ def cancel_stop(oid: int, db: Session = Depends(get_db), user=Depends(get_curren
     o.stop_date = None
     o.updated_at = datetime.now()
     o.updated_by = _user_label(user)
+    _refresh_group_base_totals(db, [o.group_name])
     db.commit()
     return {"code": 0, "data": None, "msg": "已取消停单（状态：在执）"}
 
@@ -847,6 +863,7 @@ def batch_stop(body: BatchStopBody, db: Session = Depends(get_db), user=Depends(
         o.updated_by = _user_label(user)
     if ids:
         db.query(Alert).filter(Alert.type == "停单提醒", Alert.order_id.in_(ids), Alert.status == "未处理").delete()
+    _refresh_group_base_totals(db, [o.group_name for o in rows])
     db.commit()
     return {"code": 0, "data": {"stopped": len(rows)}, "msg": f"已提交停单 {len(rows)} 单（状态：待停）"}
 
@@ -856,6 +873,7 @@ def batch_reopen(body: BatchStopBody, db: Session = Depends(get_db), user=Depend
     """批量复提：已停订单改回未提，并可更新更新日期/开始日期/截止日期（按角色权限控制）"""
     rows = db.query(Order).filter(Order.id.in_(body.ids), Order.deleted_at.is_(None)).all()
     order_nos = []
+    group_names = []
     for o in rows:
         if o.status == "已停":
             if body.order_date:
@@ -869,8 +887,10 @@ def batch_reopen(body: BatchStopBody, db: Session = Depends(get_db), user=Depend
             o.updated_at = datetime.now()
             o.updated_by = _user_label(user)
             order_nos.append(o.order_no)
+            group_names.append(o.group_name)
     if order_nos:
         _op_log(db, user, "batch_reopen_orders", f"批量复提 {len(order_nos)} 单", None, {"order_nos": order_nos})
+    _refresh_group_base_totals(db, group_names)
     db.commit()
     return {"code": 0, "data": {"reopened": len(order_nos)}, "msg": f"已复提 {len(order_nos)} 单（状态：未提）"}
 
@@ -895,6 +915,7 @@ def reopen_order(oid: int, body: ReopenBody, db: Session = Depends(get_db), user
     o.stop_date = None
     o.updated_at = datetime.now()
     o.updated_by = _user_label(user)
+    _refresh_group_base_totals(db, [o.group_name])
     db.commit()
     return {"code": 0, "data": None, "msg": "已复提（状态：未提）"}
 
@@ -908,6 +929,7 @@ def batch_delete(body: BatchStopBody, db: Session = Depends(get_db), user=Depend
     for o in rows:
         o.deleted_at = now
     _op_log(db, user, "batch_delete_orders", f"批量删除 {len(rows)} 单", None, {"order_nos": order_nos})
+    _refresh_group_base_totals(db, [o.group_name for o in rows])
     db.commit()
     return {"code": 0, "data": {"deleted": len(rows)}, "msg": f"已删除 {len(rows)} 单"}
 
