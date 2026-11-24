@@ -1286,14 +1286,6 @@ def _resolve_tpl_code(raw):
     return TPL_CODE_ALIAS.get(s.upper(), s)
 
 
-def _norm_url_part(s):
-    """归一化 url 片段：去首尾空白、去末尾斜杠、去 http/https 协议前缀"""
-    s = (s or "").strip()
-    s = s.rstrip("/")
-    s = re.sub(r"^https?://", "", s, flags=re.IGNORECASE)
-    return s
-
-
 @router.post("/import")
 async def import_orders(file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
     fn = file.filename or ""
