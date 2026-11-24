@@ -2604,6 +2604,8 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
             cid = ps.customer_id
             if not cid:
                 continue
+            if selected is not None and cid not in selected:
+                continue
             cc = next((_cc for _cc, b in bills.items() if b.get("customer_id") == cid), None)
             if cc is None:
                 cust = customers.get(cid)
