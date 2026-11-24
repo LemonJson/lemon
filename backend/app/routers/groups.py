@@ -53,15 +53,15 @@ def _next_bill_date(db, start):
     return d
 
 
-def _should_warn(db, limit, total, avg):
-    """预警：预测到下一个提单日前，累计日活会达到 limit - 每日出数量，则预警"""
+def _should_warn(db, limit, total, avg, base_total=0):
+    """预警：预测到下一个提单日前，累计日活会达到（计划出数+已出快照）- 每日出数量，则预警"""
     if limit <= 0 or avg <= 0:
         return False
     today = date.today()
     next_bill = _next_bill_date(db, today)
     days = (next_bill - today).days
-    # 剩余可出数 <= (到下一个提单日的天数 + 1) × 日均，则预警
-    return (limit - total) <= (days + 1) * avg
+    # 剩余可出数 = (计划出数 + 已出快照) - 当前累计
+    return (limit + base_total - total) <= (days + 1) * avg
 
 
 def _group_metrics(db, names):
@@ -108,7 +108,8 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
         m = metrics.get(r.group_name, {"total": 0, "avg": 0, "order_count": 0, "status": "在执",
                                        "customer_code": "", "customer_name": ""})
         limit = int(r.limit or 0)
-        warn_flag = _should_warn(db, limit, m["total"], m["avg"])
+        base_total = int(r.base_total or 0)
+        warn_flag = _should_warn(db, limit, m["total"], m["avg"], base_total)
         if status and m["status"] != status:
             continue
         if warn == "是" and not warn_flag:
@@ -120,6 +121,7 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
             "daily_total": m["total"], "daily_avg": m["avg"],
             "order_count": m["order_count"], "status": m["status"], "warn": bool(warn_flag),
             "customer_code": m["customer_code"], "customer_name": m["customer_name"],
+            "base_total": base_total,
         })
     total = len(data)
     start = (page - 1) * per_page
@@ -159,16 +161,14 @@ def create_group(body: dict, db: Session = Depends(get_db), _=Depends(get_curren
     try:
         limit = int(limit or 0)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="出数上限格式错误")
+        raise HTTPException(status_code=422, detail="计划出数格式错误")
     if limit < 0:
-        raise HTTPException(status_code=422, detail="出数上限不能为负数")
-    daily_total = db.query(func.count(DailyData.id)).filter(
-        DailyData.group_name == group_name).scalar() or 0
-    if limit <= daily_total:
-        raise HTTPException(status_code=422, detail=f"出数上限需大于已出日活数（当前已出 {daily_total}）")
+        raise HTTPException(status_code=422, detail="计划出数不能为负数")
     if db.query(GroupConfig).filter(GroupConfig.group_name == group_name).first():
         raise HTTPException(status_code=409, detail="该小组名已配置")
-    g = GroupConfig(group_name=group_name, limit=limit)
+    base_total = db.query(func.count(DailyData.id)).filter(
+        DailyData.group_name == group_name).scalar() or 0
+    g = GroupConfig(group_name=group_name, limit=limit, base_total=base_total)
     db.add(g)
     db.commit()
     return {"code": 0, "data": {"id": g.id}, "msg": "已保存"}
@@ -191,14 +191,13 @@ def update_group(gid: int, body: dict, db: Session = Depends(get_db), _=Depends(
         try:
             limit = int(body.get("limit") or 0)
         except (TypeError, ValueError):
-            raise HTTPException(status_code=422, detail="出数上限格式错误")
+            raise HTTPException(status_code=422, detail="计划出数格式错误")
         if limit < 0:
-            raise HTTPException(status_code=422, detail="出数上限不能为负数")
-        daily_total = db.query(func.count(DailyData.id)).filter(
-            DailyData.group_name == g.group_name).scalar() or 0
-        if limit <= daily_total:
-            raise HTTPException(status_code=422, detail=f"出数上限需大于已出日活数（当前已出 {daily_total}）")
+            raise HTTPException(status_code=422, detail="计划出数不能为负数")
         g.limit = limit
+    if "group_name" in body or "limit" in body:
+        g.base_total = db.query(func.count(DailyData.id)).filter(
+            DailyData.group_name == g.group_name).scalar() or 0
     db.commit()
     return {"code": 0, "data": None, "msg": "已保存"}
 

@@ -76,10 +76,13 @@ def _migrate_schema():
         ch_cols = {c["name"] for c in insp.get_columns("channel")} if "channel" in insp.get_table_names() else set()
         op_cols = {c["name"] for c in insp.get_columns("operator")} if "operator" in insp.get_table_names() else set()
         user_cols = {c["name"] for c in insp.get_columns("sys_user")} if "sys_user" in insp.get_table_names() else set()
+        gc_cols = {c["name"] for c in insp.get_columns("group_config")} if "group_config" in insp.get_table_names() else set()
         with engine.begin() as conn:
             for col, ddl in [("created_by", "VARCHAR(50)"), ("updated_by", "VARCHAR(50)")]:
                 if col not in user_cols:
                     conn.execute(text(f"ALTER TABLE sys_user ADD COLUMN {col} {ddl}"))
+            if "base_total" not in gc_cols:
+                conn.execute(text("ALTER TABLE group_config ADD COLUMN base_total INTEGER"))
             for col, ddl in [
                 ("task_id", "VARCHAR(100)"),
                 ("duration", "VARCHAR(50)"),

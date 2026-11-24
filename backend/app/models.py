@@ -560,4 +560,5 @@ class GroupConfig(Base, TimestampMixin):
     __tablename__ = "group_config"
     id = Column(Integer, primary_key=True)
     group_name = Column(String(100), unique=True, nullable=False)  # 小组名
-    limit = Column(Integer, default=0)                              # 出数上限（条数）
+    limit = Column(Integer, default=0)                              # 计划出数（条数，增量）
+    base_total = Column(Integer, default=0)                         # 配置时已出日活数快照

@@ -95,7 +95,7 @@ const KINDS = {
     cols: [
       { k: 'status', l: '状态' },
       { k: 'customer_name', l: '一级代理' }, { k: 'group_name', l: '小组名' },
-      { k: 'limit', l: '出数上限', num: true },
+      { k: 'limit', l: '计划出数', num: true },
       { k: 'daily_total', l: '累计日活数', num: true }, { k: 'daily_avg', l: '日均日活', num: true },
       { k: 'order_count', l: '关联订单数', num: true },
     ], group: true,
@@ -457,14 +457,7 @@ export default function SimpleList({ kind }) {
     if (!groupModal.id && !groupOptions.some(g => g.group_name === group_name)) {
       showError('小组名不存在，请从下拉中选择'); return
     }
-    const daily_total = groupModal.id
-      ? (groupModal.daily_total ?? 0)
-      : (groupOptions.find(g => g.group_name === group_name)?.daily_total ?? 0)
-    const limitNum = Number(groupModal.limit) || 0
-    if (limitNum <= daily_total) {
-      showError(`出数上限需大于已出日活数（当前已出 ${daily_total}）`); return
-    }
-    const body = { group_name, limit: limitNum }
+    const body = { group_name, limit: Number(groupModal.limit) || 0 }
     try {
       await withBusy(async () => {
         if (groupModal.id) await api.put(`/api/groups/${groupModal.id}`, body)
@@ -1215,7 +1208,7 @@ export default function SimpleList({ kind }) {
                 ? <div className="note">已出日活数：{groupModal.daily_total ?? 0}</div>
                 : (() => { const g = groupOptions.find(x => x.group_name === groupModal.group_name); return g ? <div className="note">已出日活数：{g.daily_total}</div> : null })()}
             </div>
-            <div className="field" style={{ flex: 1 }}><label>出数上限</label><input type="number" min="0" value={groupModal.limit} onChange={e => setGroupModal({ ...groupModal, limit: e.target.value })} /></div>
+            <div className="field" style={{ flex: 1 }}><label>计划出数</label><input type="number" min="0" value={groupModal.limit} onChange={e => setGroupModal({ ...groupModal, limit: e.target.value })} /></div>
           </div>
           <div className="foot"><button className="btn" onClick={() => setGroupModal(null)}>取消</button><button className="btn primary" onClick={saveGroup}>保存</button></div>
         </Modal>
