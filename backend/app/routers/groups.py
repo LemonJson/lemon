@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -62,23 +62,32 @@ def _should_warn(limit, total, avg, base_total=0, days=0):
     return (limit + base_total - total) <= (days + 1) * avg
 
 
-def _active_daily_totals(db, restrict_configured=False):
+def _active_daily_totals(db):
     """各小组名「当前有效订单（未提/在执）」的日活数与去重天数（先按订单过滤 task_id 再聚合，避免大表 join）"""
     active = db.query(Order.task_id).filter(
         Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None),
         Order.task_id.isnot(None)).subquery()
-    q = db.query(DailyData.group_name, func.count(DailyData.id),
-                 func.count(func.distinct(DailyData.biz_date))) \
+    rows = db.query(DailyData.group_name, func.count(DailyData.id),
+                    func.count(func.distinct(DailyData.biz_date))) \
         .join(active, DailyData.task_id == active.c.task_id) \
-        .filter(DailyData.group_name.isnot(None), DailyData.group_name != "")
-    if restrict_configured:
-        q = q.join(GroupConfig, GroupConfig.group_name == DailyData.group_name) \
-             .filter(or_(GroupConfig.stat_start_date.is_(None),
-                         DailyData.biz_date >= GroupConfig.stat_start_date))
-    rows = q.group_by(DailyData.group_name).all()
+        .filter(DailyData.group_name.isnot(None), DailyData.group_name != "") \
+        .group_by(DailyData.group_name).all()
     total_by_g = {g: int(t or 0) for g, t, _ in rows}
     days_by_g = {g: int(d or 0) for g, _, d in rows}
     return total_by_g, days_by_g
+
+
+def _active_daily_range(db, group_name, start_date):
+    """某小组名「当前有效订单（未提/在执）」在 start_date 之后的日活数与去重天数"""
+    active = db.query(Order.task_id).filter(
+        Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None),
+        Order.task_id.isnot(None)).subquery()
+    row = db.query(func.count(DailyData.id),
+                   func.count(func.distinct(DailyData.biz_date))) \
+        .join(active, DailyData.task_id == active.c.task_id) \
+        .filter(DailyData.group_name == group_name,
+                DailyData.biz_date >= start_date).one()
+    return int(row[0] or 0), int(row[1] or 0)
 
 
 def _active_daily_total(db, group_name, start_date=None):
@@ -107,7 +116,12 @@ def _parse_stat_start_date(value):
 
 def _group_metrics(db, names):
     """批量计算各小组的累计日活数/日均日活量/关联订单/代理（内存聚合，避免逐行 N+1）"""
-    total_by_g, days_by_g = _active_daily_totals(db, restrict_configured=True)
+    total_by_g, days_by_g = _active_daily_totals(db)
+    # 对设了统计开始日期的小组，按开始日期重新统计（覆盖）
+    for cfg in db.query(GroupConfig).filter(GroupConfig.group_name.in_(names)).all():
+        if cfg.stat_start_date:
+            total_by_g[cfg.group_name], days_by_g[cfg.group_name] = \
+                _active_daily_range(db, cfg.group_name, cfg.stat_start_date)
     orders_by_g = defaultdict(list)
     for o in db.query(Order.group_name, Order.status, Order.customer_id).filter(
             Order.group_name.isnot(None), Order.group_name != "",
