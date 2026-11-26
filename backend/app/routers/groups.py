@@ -44,33 +44,33 @@ def _is_bill_date(d, non_bill):
     return True
 
 
-def _next_bill_date(db, start):
-    """从 start（含）开始，找下一个提单日"""
+def _days_to_next_bill(db):
+    """从今天到下一个提单日的天数（所有小组共用，一次算好避免逐小组重复查 SysConfig）"""
     non_bill = _non_bill_dates(db)
-    d = start
+    today = date.today()
+    d = today
     while not _is_bill_date(d, non_bill):
         d += timedelta(days=1)
-    return d
+    return (d - today).days
 
 
-def _should_warn(db, limit, total, avg, base_total=0):
+def _should_warn(limit, total, avg, base_total=0, days=0):
     """预警：预测到下一个提单日前，累计日活会达到（计划出数+已出快照）- 每日出数量，则预警"""
     if limit <= 0 or avg <= 0:
         return False
-    today = date.today()
-    next_bill = _next_bill_date(db, today)
-    days = (next_bill - today).days
     # 剩余可出数 = (计划出数 + 已出快照) - 当前累计
     return (limit + base_total - total) <= (days + 1) * avg
 
 
 def _active_daily_totals(db):
-    """各小组名「当前有效订单（未提/在执）」的日活数与去重天数（join 订单过滤，去掉已停订单历史出数）"""
+    """各小组名「当前有效订单（未提/在执）」的日活数与去重天数（先按订单过滤 task_id 再聚合，避免大表 join）"""
+    active = db.query(Order.task_id).filter(
+        Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None),
+        Order.task_id.isnot(None)).subquery()
     rows = db.query(DailyData.group_name, func.count(DailyData.id),
                     func.count(func.distinct(DailyData.biz_date))) \
-        .join(Order, DailyData.task_id == Order.task_id) \
-        .filter(DailyData.group_name.isnot(None), DailyData.group_name != "",
-                Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None)) \
+        .join(active, DailyData.task_id == active.c.task_id) \
+        .filter(DailyData.group_name.isnot(None), DailyData.group_name != "") \
         .group_by(DailyData.group_name).all()
     total_by_g = {g: int(t or 0) for g, t, _ in rows}
     days_by_g = {g: int(d or 0) for g, _, d in rows}
@@ -89,9 +89,10 @@ def _group_metrics(db, names):
     """批量计算各小组的累计日活数/日均日活量/关联订单/代理（内存聚合，避免逐行 N+1）"""
     total_by_g, days_by_g = _active_daily_totals(db)
     orders_by_g = defaultdict(list)
-    for o in db.query(Order).filter(Order.group_name.isnot(None), Order.group_name != "",
-                                    Order.status.in_(("未提", "在执")),
-                                    Order.deleted_at.is_(None)).all():
+    for o in db.query(Order.group_name, Order.status, Order.customer_id).filter(
+            Order.group_name.isnot(None), Order.group_name != "",
+            Order.status.in_(("未提", "在执")),
+            Order.deleted_at.is_(None)).all():
         orders_by_g[o.group_name].append(o)
     cust_ids = {o.customer_id for orders in orders_by_g.values() for o in orders if o.customer_id}
     customers = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(cust_ids)).all()} if cust_ids else {}
@@ -122,13 +123,14 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
         q = q.filter(GroupConfig.group_name.like(f"%{group_name}%"))
     all_rows = q.all()  # 小组配置数量少，全量加载后 Python 层过滤状态/预警
     metrics = _group_metrics(db, [r.group_name for r in all_rows])
+    days = _days_to_next_bill(db)
     data = []
     for r in all_rows:
         m = metrics.get(r.group_name, {"total": 0, "avg": 0, "order_count": 0, "status": "在执",
                                        "customer_code": "", "customer_name": ""})
         limit = int(r.limit or 0)
         base_total = int(r.base_total or 0)
-        warn_flag = _should_warn(db, limit, m["total"], m["avg"], base_total)
+        warn_flag = _should_warn(limit, m["total"], m["avg"], base_total, days)
         if status and m["status"] != status:
             continue
         if warn == "是" and not warn_flag:

@@ -281,6 +281,8 @@ def _ensure_indexes():
         ("idx_daily_data_group_name", "daily_data", ["group_name"]),
         ("idx_daily_data_group_biz", "daily_data", ["group_name", "biz_date"]),
         ("idx_orders_task_id", "orders", ["task_id"]),
+        ("idx_orders_status", "orders", ["status"]),
+        ("idx_orders_group_name", "orders", ["group_name"]),
     ]
     try:
         with engine.begin() as conn:
