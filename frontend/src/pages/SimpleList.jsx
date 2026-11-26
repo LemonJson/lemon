@@ -1213,6 +1213,8 @@ export default function SimpleList({ kind }) {
                 ? <div className="note">已出日活数：{groupModal.daily_total ?? 0}</div>
                 : (() => { const g = groupOptions.find(x => x.group_name === groupModal.group_name); return g ? <div className="note">已出日活数：{g.daily_total}</div> : null })()}
             </div>
+          </div>
+          <div className="row">
             <div className="field" style={{ flex: 1 }}><label>计划出数</label><input type="number" min="0" value={groupModal.limit} onChange={e => setGroupModal({ ...groupModal, limit: e.target.value })} /></div>
             <div className="field" style={{ flex: 1 }}><label>统计开始日期</label><input type="date" value={groupModal.stat_start_date || ''} onChange={e => setGroupModal({ ...groupModal, stat_start_date: e.target.value })} /></div>
           </div>
