@@ -666,6 +666,23 @@ def _backup_loop():
         time.sleep(60)  # 防止重复触发
 
 
+def _warm_group_cache_loop():
+    """后台预热小组日活统计缓存，避免重启后首次请求因冷缓存/冷磁盘卡顿"""
+    from .routers.groups import _active_daily_totals, _ACTIVE_DAILY_TTL
+    interval = max(_ACTIVE_DAILY_TTL - 5.0, 5.0)
+    time.sleep(2)  # 等应用启动完成、数据库就绪后再预热
+    while True:
+        try:
+            db = SessionLocal()
+            try:
+                _active_daily_totals(db)
+            finally:
+                db.close()
+        except Exception:  # noqa
+            pass
+        time.sleep(interval)
+
+
 def _trash_cleanup_loop():
     """每天按配置时间清理垃圾箱中超过保留天数的数据"""
     from .models import SysConfig
@@ -829,6 +846,7 @@ def on_startup():
     threading.Thread(target=_backup_loop, daemon=True).start()
     threading.Thread(target=_agent_order_snapshot_loop, daemon=True).start()
     threading.Thread(target=_trash_cleanup_loop, daemon=True).start()
+    threading.Thread(target=_warm_group_cache_loop, daemon=True).start()
 
 
 @app.get("/healthz")

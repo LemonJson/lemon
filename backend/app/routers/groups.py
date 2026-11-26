@@ -1,4 +1,5 @@
 """小组名出数上限配置路由"""
+import threading
 import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -17,6 +18,7 @@ router = APIRouter(prefix="/api/groups", tags=["groups"])
 # 小组日活统计缓存（daily_data 行数大，聚合慢；缓存 30 秒，数据变化时由停单/复提/导入日活等接口主动失效）
 _ACTIVE_DAILY_TTL = 30.0
 _active_daily_cache = {"ts": 0.0, "total_by_g": {}, "days_by_g": {}}
+_active_daily_lock = threading.Lock()
 
 
 def _invalidate_group_cache():
@@ -73,24 +75,28 @@ def _should_warn(limit, total, avg, base_total=0, days=0):
 
 
 def _active_daily_totals(db):
-    """各小组名「当前有效订单（未提/在执）」的日活数与去重天数（先按订单过滤 task_id 再聚合，避免大表 join；结果缓存 30 秒）"""
+    """各小组名「当前有效订单（未提/在执）」的日活数与去重天数（先按订单过滤 task_id 再聚合；结果缓存 30 秒）"""
     now = time.time()
     if now - _active_daily_cache["ts"] < _ACTIVE_DAILY_TTL:
         return _active_daily_cache["total_by_g"], _active_daily_cache["days_by_g"]
-    active = db.query(Order.task_id).filter(
-        Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None),
-        Order.task_id.isnot(None)).subquery()
-    rows = db.query(DailyData.group_name, func.count(DailyData.id),
-                    func.count(func.distinct(DailyData.biz_date))) \
-        .join(active, DailyData.task_id == active.c.task_id) \
-        .filter(DailyData.group_name.isnot(None), DailyData.group_name != "") \
-        .group_by(DailyData.group_name).all()
-    total_by_g = {g: int(t or 0) for g, t, _ in rows}
-    days_by_g = {g: int(d or 0) for g, _, d in rows}
-    _active_daily_cache["ts"] = now
-    _active_daily_cache["total_by_g"] = total_by_g
-    _active_daily_cache["days_by_g"] = days_by_g
-    return total_by_g, days_by_g
+    with _active_daily_lock:
+        # 双重检查：等待锁期间可能已有别的线程（含后台预热）填充了缓存
+        if time.time() - _active_daily_cache["ts"] < _ACTIVE_DAILY_TTL:
+            return _active_daily_cache["total_by_g"], _active_daily_cache["days_by_g"]
+        active = db.query(Order.task_id).filter(
+            Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None),
+            Order.task_id.isnot(None)).subquery()
+        rows = db.query(DailyData.group_name, func.count(DailyData.id),
+                        func.count(func.distinct(DailyData.biz_date))) \
+            .join(active, DailyData.task_id == active.c.task_id) \
+            .filter(DailyData.group_name.isnot(None), DailyData.group_name != "") \
+            .group_by(DailyData.group_name).all()
+        total_by_g = {g: int(t or 0) for g, t, _ in rows}
+        days_by_g = {g: int(d or 0) for g, _, d in rows}
+        _active_daily_cache["ts"] = time.time()
+        _active_daily_cache["total_by_g"] = total_by_g
+        _active_daily_cache["days_by_g"] = days_by_g
+        return total_by_g, days_by_g
 
 
 def _active_daily_range(db, group_name, start_date):
