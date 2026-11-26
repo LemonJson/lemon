@@ -19,6 +19,7 @@ from ..pagination import paginate, ok_page
 from ..utils import fmt_dt, fmt_date, norm_region
 from ..tidabiao import _order_type, _region_mode
 from ..regions import CITIES, PROVINCES, MUNICIPALITIES, normalize_region
+from .groups import _invalidate_group_cache
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -61,6 +62,7 @@ def _refresh_group_base_totals(db, group_names):
     names = {g for g in group_names if g}
     if not names:
         return
+    _invalidate_group_cache()
     db.flush()  # 先把内存中订单状态的改动落库，确保下方查询读到最新状态
     for g in db.query(GroupConfig).filter(GroupConfig.group_name.in_(names)).all():
         q = db.query(func.count(DailyData.id)) \

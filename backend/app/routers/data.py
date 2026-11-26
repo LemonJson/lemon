@@ -23,6 +23,7 @@ from ..pagination import paginate, ok_page
 from ..excel import xlsx_response
 from ..utils import fmt_dt, fmt_date
 from ..schemas import BatchStopBody, GenerateBody, ExtractBody
+from .groups import _invalidate_group_cache
 
 router = APIRouter(prefix="/api", tags=["data"])
 
@@ -822,6 +823,7 @@ async def import_daily(files: List[UploadFile] = File(...), biz_date: str = Form
         imported += n
         deduped += dd
     db.commit()
+    _invalidate_group_cache()
     inactive_items = _count_inactive_orders(db, date_obj)
     return {"code": 0, "data": {"imported": imported, "deduped": deduped, "errors": errors, "inactive_items": inactive_items},
             "msg": f"导入 {imported} 条，去重 {deduped} 条，失败 {len(errors)} 条"}
@@ -958,6 +960,8 @@ async def import_daily_csv(files: List[UploadFile] = File(...), biz_date: str = 
             stats["errors"].append(f"{fn}: {e}")
     if seen_files == 0 and not stats["errors"]:
         raise HTTPException(status_code=422, detail="请选择 csv 文件")
+    db.commit()
+    _invalidate_group_cache()
     return {"code": 0, "data": {"imported": stats["imported"], "deduped": stats["deduped"],
                                  "skipped": stats["skipped"], "errors": stats["errors"]},
             "msg": f"CSV 原样导入 {stats['imported']} 条，去重 {stats['deduped']} 条，跳过 {stats['skipped']} 条"}
@@ -969,6 +973,7 @@ def batch_delete_daily(body: BatchStopBody, db: Session = Depends(get_db), _=Dep
     for r in rows:
         db.delete(r)
     db.commit()
+    _invalidate_group_cache()
     return {"code": 0, "data": {"deleted": len(rows)}, "msg": f"已删除 {len(rows)} 条"}
 
 
@@ -980,6 +985,7 @@ def delete_daily_by_date(body: GenerateBody, db: Session = Depends(get_db), _=De
     n = db.query(DailyData).filter(DailyData.biz_date == d).count()
     db.query(DailyData).filter(DailyData.biz_date == d).delete()
     db.commit()
+    _invalidate_group_cache()
     return {"code": 0, "data": {"deleted": n}, "msg": f"已删除 {body.date} 的 {n} 条日活数据"}
 
 
@@ -1014,6 +1020,7 @@ def clear_daily(db: Session = Depends(get_db), _=Depends(get_current_user)):
     n = db.query(DailyData).count()
     db.query(DailyData).delete()
     db.commit()
+    _invalidate_group_cache()
     return {"code": 0, "data": {"cleared": n}, "msg": f"已清空 {n} 条日活数据"}
 
 

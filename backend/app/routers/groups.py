@@ -1,4 +1,5 @@
 """小组名出数上限配置路由"""
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
@@ -12,6 +13,15 @@ from ..models import GroupConfig, Order, DailyData, Alert, Customer, SysConfig
 from ..pagination import paginate, ok_page
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
+
+# 小组日活统计缓存（daily_data 行数大，聚合慢；缓存 30 秒，数据变化时由停单/复提/导入日活等接口主动失效）
+_ACTIVE_DAILY_TTL = 30.0
+_active_daily_cache = {"ts": 0.0, "total_by_g": {}, "days_by_g": {}}
+
+
+def _invalidate_group_cache():
+    """停单/复提/删除订单/新增/编辑/导入日活后，清除小组日活统计缓存"""
+    _active_daily_cache["ts"] = 0.0
 
 
 def _user_label(user):
@@ -63,7 +73,10 @@ def _should_warn(limit, total, avg, base_total=0, days=0):
 
 
 def _active_daily_totals(db):
-    """各小组名「当前有效订单（未提/在执）」的日活数与去重天数（先按订单过滤 task_id 再聚合，避免大表 join）"""
+    """各小组名「当前有效订单（未提/在执）」的日活数与去重天数（先按订单过滤 task_id 再聚合，避免大表 join；结果缓存 30 秒）"""
+    now = time.time()
+    if now - _active_daily_cache["ts"] < _ACTIVE_DAILY_TTL:
+        return _active_daily_cache["total_by_g"], _active_daily_cache["days_by_g"]
     active = db.query(Order.task_id).filter(
         Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None),
         Order.task_id.isnot(None)).subquery()
@@ -74,6 +87,9 @@ def _active_daily_totals(db):
         .group_by(DailyData.group_name).all()
     total_by_g = {g: int(t or 0) for g, t, _ in rows}
     days_by_g = {g: int(d or 0) for g, _, d in rows}
+    _active_daily_cache["ts"] = now
+    _active_daily_cache["total_by_g"] = total_by_g
+    _active_daily_cache["days_by_g"] = days_by_g
     return total_by_g, days_by_g
 
 
