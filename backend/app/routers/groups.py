@@ -15,8 +15,8 @@ from ..pagination import paginate, ok_page
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
 
-# 小组日活统计缓存（daily_data 行数大，聚合慢；缓存 30 秒，数据变化时由停单/复提/导入日活等接口主动失效）
-_ACTIVE_DAILY_TTL = 30.0
+# 小组日活统计缓存（daily_data 行数大，聚合慢；缓存 5 分钟，数据变化时由停单/复提/导入日活等接口主动失效）
+_ACTIVE_DAILY_TTL = 300.0
 _active_daily_cache = {"ts": 0.0, "total_by_g": {}, "days_by_g": {}}
 _active_daily_lock = threading.Lock()
 
