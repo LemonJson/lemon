@@ -1191,7 +1191,7 @@ export default function SimpleList({ kind }) {
         <Modal title={groupModal.id ? '编辑小组配置' : '新增小组配置'} onClose={() => setGroupModal(null)}>
           <div className="row">
             {!groupModal.id && (
-              <div className="field"><label className="required">一级代理</label>
+              <div className="field" style={{ flex: 1 }}><label className="required">一级代理</label>
                 <select value={groupModal.customer_id || ''} onChange={e => setGroupModal({ ...groupModal, customer_id: Number(e.target.value) || '', group_name: '' })}>
                   <option value="">请选择代理</option>
                   {[...new Map(groupOptions.map(g => [g.customer_id, g])).values()].map(a => (
@@ -1209,16 +1209,19 @@ export default function SimpleList({ kind }) {
                       {groupOptions.filter(g => !groupModal.customer_id || g.customer_id === groupModal.customer_id).map(g => <option key={g.group_name} value={g.group_name} />)}
                     </datalist>
                   </>}
-              {groupModal.id
-                ? <div className="note">已出日活数：{groupModal.daily_total ?? 0}</div>
-                : (() => { const g = groupOptions.find(x => x.group_name === groupModal.group_name); return g ? <div className="note">已出日活数：{g.daily_total}</div> : null })()}
+              {(() => {
+                const total = groupModal.id
+                  ? (groupModal.daily_total ?? 0)
+                  : (groupOptions.find(x => x.group_name === groupModal.group_name)?.daily_total ?? 0)
+                return <div style={{ marginTop: 6, fontSize: 12, color: 'var(--sub)' }}>已出日活数：<strong style={{ color: 'var(--blue)', fontSize: 13, fontWeight: 600 }}>{total.toLocaleString()}</strong></div>
+              })()}
             </div>
           </div>
           <div className="row">
-            <div className="field" style={{ flex: 1 }}><label>计划出数</label><input type="number" min="0" value={groupModal.limit} onChange={e => setGroupModal({ ...groupModal, limit: e.target.value })} /></div>
-            <div className="field" style={{ flex: 1 }}><label>统计开始日期</label><input type="date" value={groupModal.stat_start_date || ''} onChange={e => setGroupModal({ ...groupModal, stat_start_date: e.target.value })} /></div>
+            <div className="field"><label>计划出数</label><input type="number" min="0" value={groupModal.limit} onChange={e => setGroupModal({ ...groupModal, limit: e.target.value })} placeholder="接下来计划出的数量" /></div>
+            <div className="field"><label>统计开始日期</label><input type="date" value={groupModal.stat_start_date || ''} onChange={e => setGroupModal({ ...groupModal, stat_start_date: e.target.value })} /></div>
           </div>
-          <div className="note" style={{ marginBottom: 8 }}>统计开始日期：只统计该日期之后的日活数据（留空则统计全部）。</div>
+          <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 4 }}>统计开始日期：只统计该日期之后的日活数据，留空则统计全部。</div>
           <div className="foot"><button className="btn" onClick={() => setGroupModal(null)}>取消</button><button className="btn primary" onClick={saveGroup}>保存</button></div>
         </Modal>
       )}
