@@ -446,11 +446,11 @@ export default function SimpleList({ kind }) {
     api.get('/api/groups/options').then(r => {
       const opts = r.data || []
       setGroupOptions(opts)
-      setGroupModal({ id: null, customer_id: '', group_name: '', limit: 0 })
+      setGroupModal({ id: null, customer_id: '', group_name: '', limit: 0, stat_start_date: '' })
     }).catch(e => showError(e.message))
   }
   function openGroupEdit(r) {
-    setGroupModal({ id: r.id, group_name: r.group_name, limit: r.limit, daily_total: r.daily_total })
+    setGroupModal({ id: r.id, group_name: r.group_name, limit: r.limit, daily_total: r.daily_total, stat_start_date: r.stat_start_date || '' })
   }
   async function saveGroup() {
     const group_name = (groupModal.group_name || '').trim()
@@ -458,7 +458,7 @@ export default function SimpleList({ kind }) {
     if (!groupModal.id && !groupOptions.some(g => g.group_name === group_name)) {
       showError('小组名不存在，请从下拉中选择'); return
     }
-    const body = { group_name, limit: Number(groupModal.limit) || 0 }
+    const body = { group_name, limit: Number(groupModal.limit) || 0, stat_start_date: groupModal.stat_start_date || '' }
     try {
       await withBusy(async () => {
         if (groupModal.id) await api.put(`/api/groups/${groupModal.id}`, body)
@@ -1214,7 +1214,9 @@ export default function SimpleList({ kind }) {
                 : (() => { const g = groupOptions.find(x => x.group_name === groupModal.group_name); return g ? <div className="note">已出日活数：{g.daily_total}</div> : null })()}
             </div>
             <div className="field" style={{ flex: 1 }}><label>计划出数</label><input type="number" min="0" value={groupModal.limit} onChange={e => setGroupModal({ ...groupModal, limit: e.target.value })} /></div>
+            <div className="field" style={{ flex: 1 }}><label>统计开始日期</label><input type="date" value={groupModal.stat_start_date || ''} onChange={e => setGroupModal({ ...groupModal, stat_start_date: e.target.value })} /></div>
           </div>
+          <div className="note" style={{ marginBottom: 8 }}>统计开始日期：只统计该日期之后的日活数据（留空则统计全部）。</div>
           <div className="foot"><button className="btn" onClick={() => setGroupModal(null)}>取消</button><button className="btn primary" onClick={saveGroup}>保存</button></div>
         </Modal>
       )}

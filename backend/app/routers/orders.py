@@ -63,10 +63,13 @@ def _refresh_group_base_totals(db, group_names):
         return
     db.flush()  # 先把内存中订单状态的改动落库，确保下方查询读到最新状态
     for g in db.query(GroupConfig).filter(GroupConfig.group_name.in_(names)).all():
-        g.base_total = db.query(func.count(DailyData.id)) \
+        q = db.query(func.count(DailyData.id)) \
             .join(Order, DailyData.task_id == Order.task_id) \
             .filter(DailyData.group_name == g.group_name,
-                    Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None)).scalar() or 0
+                    Order.status.in_(("未提", "在执")), Order.deleted_at.is_(None))
+        if g.stat_start_date:
+            q = q.filter(DailyData.biz_date >= g.stat_start_date)
+        g.base_total = q.scalar() or 0
 
 
 def match_template(db: Session, o) -> int:

@@ -83,6 +83,8 @@ def _migrate_schema():
                     conn.execute(text(f"ALTER TABLE sys_user ADD COLUMN {col} {ddl}"))
             if "base_total" not in gc_cols:
                 conn.execute(text("ALTER TABLE group_config ADD COLUMN base_total INTEGER"))
+            if "stat_start_date" not in gc_cols:
+                conn.execute(text("ALTER TABLE group_config ADD COLUMN stat_start_date DATE"))
             for col, ddl in [
                 ("task_id", "VARCHAR(100)"),
                 ("duration", "VARCHAR(50)"),

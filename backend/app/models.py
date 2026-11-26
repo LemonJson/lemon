@@ -562,3 +562,4 @@ class GroupConfig(Base, TimestampMixin):
     group_name = Column(String(100), unique=True, nullable=False)  # 小组名
     limit = Column(Integer, default=0)                              # 计划出数（条数，增量）
     base_total = Column(Integer, default=0)                         # 配置时已出日活数快照
+    stat_start_date = Column(Date)                                  # 统计开始日期（只统计该日期之后的日活）
