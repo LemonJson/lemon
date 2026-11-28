@@ -124,6 +124,14 @@ def list_daily(db: Session = Depends(get_db), _=Depends(get_current_user),
     return ok_page([_daily_dict(d) for d in rows], total)
 
 
+@router.post("/daily-data/backfill-dist-status")
+def backfill_dist_status(db: Session = Depends(get_db), _=Depends(require_admin)):
+    """把历史日活全部标记为已分（历史数据视为已分发；以后的分数据才按实际情况标记已分/未分）"""
+    n = db.query(DailyData).update({"dist_status": "已分"}, synchronize_session=False)
+    db.commit()
+    return {"code": 0, "data": {"updated": n}, "msg": f"已将 {n} 条历史日活标记为已分"}
+
+
 @router.put("/daily-data/{did}")
 def update_daily(did: int, body: dict, db: Session = Depends(get_db), _=Depends(get_current_user)):
     d = db.query(DailyData).filter(DailyData.id == did).first()
