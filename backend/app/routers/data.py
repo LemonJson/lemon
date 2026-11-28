@@ -18,12 +18,12 @@ from ..database import get_db, SessionLocal
 from ..deps import get_current_user, require_admin, require_permission
 from ..models import (DailyData, Fund, Bill, Alert, Customer, Channel, Category,
                       Order, SysConfig, Operator, SourceFile, Template, WashName, Platform,
-                      CustomerRecharge, CustomerPrice, Notification, Product, ProductSale)
+                      CustomerRecharge, CustomerPrice, Notification, Product, ProductSale, GroupConfig)
 from ..pagination import paginate, ok_page
 from ..excel import xlsx_response
 from ..utils import fmt_dt, fmt_date
 from ..schemas import BatchStopBody, GenerateBody, ExtractBody
-from .groups import _invalidate_group_cache
+from .groups import _invalidate_group_cache, _group_metrics
 
 router = APIRouter(prefix="/api", tags=["data"])
 
@@ -159,6 +159,7 @@ def _daily_dict(d: DailyData):
         "channel": d.channel or "", "group_name": d.group_name or "",
         "source_file": d.source_file or "",
         "source_file_id": d.source_file_id,
+        "dist_status": d.dist_status or "未分",
         "created_at": fmt_dt(d.created_at), "updated_at": fmt_dt(d.updated_at),
     }
 
@@ -2380,6 +2381,33 @@ def _regen_downstream_bills(db, date_obj, customer_ids, user_label=""):
     db.commit()
 
 
+def _alloc_drop_by_ratio(tid_counts, exceed):
+    """按各 task_id 的条数占比，分配 exceed 条舍弃量（最大余数法，保证总和等于 exceed）"""
+    total = sum(tid_counts.values())
+    if total <= 0 or exceed <= 0:
+        return {}
+    alloc = {}
+    remain = exceed
+    for tid, c in tid_counts.items():
+        alloc[tid] = exceed * c // total
+        remain -= alloc[tid]
+    for tid in sorted(tid_counts, key=lambda t: -tid_counts[t]):
+        if remain <= 0:
+            break
+        alloc[tid] += 1
+        remain -= 1
+    return {tid: n for tid, n in alloc.items() if n > 0}
+
+
+def _mark_distributed(db, ids, batch=2000):
+    """把指定日活 id 标记为已分（分批 IN，避免单条 SQL 过大）"""
+    ids = list(ids)
+    for i in range(0, len(ids), batch):
+        chunk = ids[i:i + batch]
+        db.query(DailyData).filter(DailyData.id.in_(chunk)).update(
+            {"dist_status": "已分"}, synchronize_session=False)
+
+
 @router.post("/daily-data/distribute")
 def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """分数据：按小组名分组，用出数模版生成文件，按一级代理建文件夹"""
@@ -2485,6 +2513,57 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
         if (d.group_name or "") and d.customer_id:
             valid_tids.add(tid)
 
+    # 2.5 按小组出数上限舍掉超出的数据（超出部分不进分数文件、不记账，按订单占比舍弃）
+    group_limits = {g.group_name: (int(g.limit or 0) + int(g.base_total or 0))
+                    for g in db.query(GroupConfig).all()}
+    group_already = {gname: gtotal["total"]
+                     for gname, gtotal in _group_metrics(db, list(group_limits.keys())).items()}
+    group_tid_count = defaultdict(lambda: defaultdict(int))
+    group_total_count = defaultdict(int)
+    for d in rows:
+        tid = d.task_id
+        if tid not in valid_tids:
+            continue
+        if selected is not None and d.customer_id not in selected:
+            continue
+        g = d.group_name or ""
+        group_tid_count[g][tid] += 1
+        group_total_count[g] += 1
+    drop_by_tid = defaultdict(int)
+    for g, tids in group_tid_count.items():
+        limit = group_limits.get(g, 0)
+        already = group_already.get(g, 0)
+        current = group_total_count[g]
+        if limit <= 0:
+            continue
+        exceed = already + current - limit
+        if exceed <= 0:
+            continue
+        exceed = min(exceed, current)
+        for tid, n in _alloc_drop_by_ratio(tids, exceed).items():
+            drop_by_tid[tid] += n
+    # 保留的日活 id 集合（用于 jobs/bills/标记已分）
+    tid_kept = defaultdict(int)
+    tid_total = defaultdict(int)
+    keep_ids = set()
+    for d in rows:
+        tid = d.task_id
+        if tid not in valid_tids:
+            continue
+        if selected is not None and d.customer_id not in selected:
+            continue
+        tid_total[tid] += 1
+    for d in rows:
+        tid = d.task_id
+        if tid not in valid_tids:
+            continue
+        if selected is not None and d.customer_id not in selected:
+            continue
+        if tid_kept[tid] >= tid_total[tid] - drop_by_tid.get(tid, 0):
+            continue
+        tid_kept[tid] += 1
+        keep_ids.add(d.id)
+
     # 3. 按小组聚合（用每行日活的 group_name + customer_id），校验出数模版/一级代理一致性
     group_meta = {}
     for d in rows:
@@ -2531,6 +2610,8 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
             continue
         if selected is not None and d.customer_id not in selected:
             continue
+        if d.id not in keep_ids:
+            continue  # 超出小组出数上限，舍掉
         info = orders_info[tid]
         g = d.group_name or ""
         tpl = info["tpl_code"]
@@ -2547,6 +2628,7 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
                 "tpl_code": tpl,
             }
         jobs[key]["records"].append({
+            "daily_id": d.id,
             "url": d.phone or "",
             "name": d.name or "",
             "province": d.province or "",
@@ -2578,6 +2660,8 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
                 continue
             if selected is not None and d.customer_id not in selected:
                 continue
+            if d.id not in keep_ids:
+                continue  # 超出小组出数上限，舍掉不计账
             info = orders_info[tid]
             if (info.get("price") or 0) <= 0:
                 continue  # 单价为 0 的订单不生成账单/明细
@@ -2741,8 +2825,12 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
                                         should_cancel=lambda: _DISTRIBUTE_TASKS[task_id].get("cancel"))
             data = buf.getvalue()
             db2.add(SourceFile(filename=f"分发数据-{date_obj.strftime('%Y-%m-%d')}.zip",
-                               file_data=data, file_type="zip", category="出货",
-                               biz_date=date_obj.strftime("%Y-%m-%d"), size=len(data)))
+                                file_data=data, file_type="zip", category="出货",
+                                biz_date=date_obj.strftime("%Y-%m-%d"), size=len(data)))
+            # 标记分数据状态：该日期日活先重置为未分，再标记保留(进入分数文件)的为已分
+            db2.query(DailyData).filter(DailyData.biz_date == date_obj).update(
+                {"dist_status": "未分"}, synchronize_session=False)
+            _mark_distributed(db2, keep_ids)
             db2.commit()
             _DISTRIBUTE_TASKS[task_id]["buffer"] = buf
             _DISTRIBUTE_TASKS[task_id]["status"] = "done"

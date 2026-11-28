@@ -335,6 +335,7 @@ class DailyData(Base, TimestampMixin):
     order_date = Column(Date)                    # 订单更新日期（快照）
     end_date = Column(Date)                      # 订单截止日期（快照）
     upstream_price = Column(Numeric(10, 4))      # 上游成本价（元/条，快照：按 上游/渠道/运营商 定价）
+    dist_status = Column(String(10), default="未分")  # 分数据状态：已分/未分
 
 
 # ============ 业务：洗名库（手机号 → 姓名） ============

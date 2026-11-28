@@ -1,4 +1,5 @@
 """小组名出数上限配置路由"""
+import math
 import threading
 import time
 from collections import defaultdict
@@ -180,12 +181,14 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
     all_rows = q.all()  # 小组配置数量少，全量加载后 Python 层过滤状态/预警
     metrics = _group_metrics(db, [r.group_name for r in all_rows])
     days = _days_to_next_bill(db)
+    today = date.today()
     data = []
     for r in all_rows:
         m = metrics.get(r.group_name, {"total": 0, "avg": 0, "order_count": 0, "status": "在执",
                                        "customer_code": "", "customer_name": ""})
         limit = int(r.limit or 0)
         base_total = int(r.base_total or 0)
+        total_limit = limit + base_total
         warn_flag = _should_warn(limit, m["total"], m["avg"], base_total, days)
         if status and m["status"] != status:
             continue
@@ -193,13 +196,20 @@ def list_groups(db: Session = Depends(get_db), _=Depends(get_current_user),
             continue
         if warn == "否" and warn_flag:
             continue
+        # 预计截止日：剩余可出数 ÷ 日均，从今天往后推自然日（无法预测则留空）
+        remain = total_limit - m["total"]
+        est_end_date = ""
+        if m["avg"] and m["avg"] > 0 and remain > 0:
+            est_days = math.ceil(remain / m["avg"])
+            est_end_date = (today + timedelta(days=est_days)).strftime("%Y-%m-%d")
         data.append({
             "id": r.id, "group_name": r.group_name, "limit": limit,
             "daily_total": m["total"], "daily_avg": m["avg"],
             "order_count": m["order_count"], "status": m["status"], "warn": bool(warn_flag),
             "customer_code": m["customer_code"], "customer_name": m["customer_name"],
-            "base_total": base_total, "total_limit": limit + base_total,
+            "base_total": base_total, "total_limit": total_limit,
             "stat_start_date": r.stat_start_date.strftime("%Y-%m-%d") if r.stat_start_date else "",
+            "est_end_date": est_end_date,
         })
     total = len(data)
     start = (page - 1) * per_page

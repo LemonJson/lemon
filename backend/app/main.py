@@ -153,6 +153,7 @@ def _migrate_schema():
                 ("order_date", "DATE"),
                 ("end_date", "DATE"),
                 ("upstream_price", "NUMERIC(10, 4)"),
+                ("dist_status", "VARCHAR(10)"),
             ]:
                 if col not in daily_cols:
                     conn.execute(text(f"ALTER TABLE daily_data ADD COLUMN {col} {ddl}"))

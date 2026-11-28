@@ -51,7 +51,7 @@ const KINDS = {
       { k: 'task_name', l: '任务名' }, { k: 'phone', l: '手机号' }, { k: 'name', l: '姓名' }, { k: 'province', l: '省' },
       { k: 'city', l: '市' }, { k: 'operator', l: '运营商' }, { k: 'cat1', l: '一级品类' }, { k: 'cat2', l: '二级品类' }, { k: 'platform', l: '平台' },
       { k: 'customer', l: '一级代理' }, { k: 'channel', l: '渠道' },
-      { k: 'group_name', l: '小组' },
+      { k: 'group_name', l: '小组' }, { k: 'dist_status', l: '状态' },
       { k: 'source_file', l: '来源文件名' }, { k: 'created_at', l: '创建时间' }, { k: 'updated_at', l: '更新时间' },
     ], export: true, dailyImp: true, csvImp: true, batchDel: true, batchDelAdmin: true, dist: true, check: true, showSeq: true, defaultPerPage: 500, dailyEdit: true,
       defaultHidden: ['name', 'cat1', 'cat2', 'source_file'],
@@ -99,6 +99,7 @@ const KINDS = {
       { k: 'daily_total', l: '已出日活数', num: true },
       { k: 'remain', l: '待出日活数', num: true },
       { k: 'daily_avg', l: '日均日活', num: true },
+      { k: 'est_end_date', l: '预计截止日' },
       { k: 'order_count', l: '关联订单数', num: true },
     ], group: true,
   },
@@ -700,6 +701,7 @@ export default function SimpleList({ kind }) {
       const remain = (r.total_limit ?? 0) - (r.daily_total ?? 0)
       return <span style={remain < 0 ? { color: '#dc2626' } : undefined}>{remain.toLocaleString()}</span>
     }
+    if (c.k === 'dist_status') return <Badge value={v} />
     if (['status'].includes(c.k)) return <Badge value={v === 1 ? '启用' : v === 0 ? '停用' : v} />
     if (['level', 'gender', 'deposit_status', 'wash_status', 'type'].includes(c.k)) return <Badge value={v} />
     if (c.num && typeof v === 'number') return v.toLocaleString()
