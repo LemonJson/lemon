@@ -2550,7 +2550,8 @@ def distribute_daily(body: GenerateBody, db: Session = Depends(get_db), user=Dep
         current = group_total_count[g]
         if limit <= 0:
             continue
-        exceed = already + current - limit
+        # already 为「当前有效订单」已出日活数（已含今天该小组的日活），故超出量 = 已出 - 上限
+        exceed = already - limit
         if exceed <= 0:
             continue
         exceed = min(exceed, current)
