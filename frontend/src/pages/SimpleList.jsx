@@ -378,6 +378,7 @@ export default function SimpleList({ kind }) {
     }
     // 日活数据：甲方/运营商/一级代理/省市 + 级联选项（品类/代理→二级代理/渠道）
     if (kind === 'daily') {
+      setOpt('dist_status', ['未分', '已分'])
       api.get('/api/customers?per_page=1000').then(r => {
         setOpt('upstream', r.data.rows.filter(c => c.ctype === 'upstream').map(c => c.name))
         setOpt('customer', r.data.rows.filter(c => c.ctype === 'downstream').map(c => c.code))
