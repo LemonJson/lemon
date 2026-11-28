@@ -60,6 +60,7 @@ def list_daily(db: Session = Depends(get_db), _=Depends(get_current_user),
                 source_file: str = "", customer: str = "", secondary_agent: str = "",
                 channel: str = "", group_name: str = "", biz_date: str = "", name: str = "",
                 start_date: str = "", end_date: str = "", platform_empty: str = "",
+                dist_status: str = "",
                 page: int = 1, per_page: int = 10):
     qy = db.query(DailyData)
     if q:
@@ -106,6 +107,11 @@ def list_daily(db: Session = Depends(get_db), _=Depends(get_current_user),
         qy = qy.filter(DailyData.name.like(f"%{name}%"))
     if biz_date:
         qy = qy.filter(DailyData.biz_date == biz_date)
+    if dist_status:
+        if dist_status == "未分":
+            qy = qy.filter(or_(DailyData.dist_status == "未分", DailyData.dist_status.is_(None)))
+        else:
+            qy = qy.filter(DailyData.dist_status == dist_status)
     if start_date:
         sd = _parse_biz_date(start_date)
         if sd:

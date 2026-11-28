@@ -10,6 +10,7 @@ const ENUM_COLS = {
   ctype: ['上游', '下游'],
   role: ['超级管理员', '运营', '财务', '只读'],
   coop: ['合作中', '暂停', '已终止', '洽谈中'],
+  dist_status: ['未分', '已分'],
 }
 
 const DATE_KEYS = ['start_date', 'end_date', 'order_date', 'biz_date', 'stop_date']
