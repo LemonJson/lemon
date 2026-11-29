@@ -667,6 +667,20 @@ def _backup_loop():
         time.sleep(60)  # 防止重复触发
 
 
+def _backfill_dist_status_once(db):
+    """历史日活状态一次性回填：把现有日活全部标记为已分（仅首次启动时执行，之后不再执行）"""
+    from .models import SysConfig, DailyData
+    try:
+        if db.query(SysConfig).filter(SysConfig.key == "dist_status_backfilled").first():
+            return  # 已执行过，跳过
+        n = db.query(DailyData).update({"dist_status": "已分"}, synchronize_session=False)
+        db.add(SysConfig(key="dist_status_backfilled", value="1"))
+        db.commit()
+        print(f"[migrate] 历史日活状态回填：{n} 条标记为已分")
+    except Exception as e:  # noqa
+        print(f"[migrate] 历史日活状态回填失败：{e}")
+
+
 def _warm_group_cache_loop():
     """后台预热小组日活统计缓存，避免重启后首次请求因冷缓存/冷磁盘卡顿"""
     from .routers.groups import _active_daily_totals, _ACTIVE_DAILY_TTL
@@ -839,6 +853,7 @@ def on_startup():
         seed(db)
         _backfill_cat_plat_codes(db)
         _backfill_daily_group(db)
+        _backfill_dist_status_once(db)
         from .routers.dashboard import snapshot_agent_orders
         snapshot_agent_orders(db)
     finally:
